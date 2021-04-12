@@ -12,6 +12,8 @@ use std::io;
 pub mod acpi;
 pub mod bus;
 pub mod legacy;
+/// PCI Devices
+pub mod pci;
 pub mod pseudo;
 pub mod virtio;
 

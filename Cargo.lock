@@ -113,6 +113,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.97"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -207,7 +213,7 @@ dependencies = [
  "bitflags 2.9.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.12.1",
  "lazy_static",
  "lazycell",
  "log",
@@ -780,6 +786,15 @@ dependencies = [
 
 [[package]]
 name = "itertools"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -1022,6 +1037,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pci"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "libc",
+ "log",
+ "vfio-bindings 0.2.0",
+ "vfio-ioctls",
+ "vm-device",
+ "vm-memory",
+ "vm-system-allocator",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1125,7 +1158,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3779b94aeb87e8bd4e834cee3650289ee9e0d5677f976ecdb6d219e5f4f6cd94"
 dependencies = [
  "rand_chacha 0.9.0",
- "rand_core 0.9.0",
+ "rand_core 0.9.3",
  "zerocopy 0.8.24",
 ]
 
@@ -1146,7 +1179,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
- "rand_core 0.9.0",
+ "rand_core 0.9.3",
 ]
 
 [[package]]
@@ -1160,12 +1193,11 @@ dependencies = [
 
 [[package]]
 name = "rand_core"
-version = "0.9.0"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b08f3c9802962f7e1b25113931d94f43ed9725bebc59db9d0c3e9a23b67e15ff"
+checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 dependencies = [
  "getrandom 0.3.1",
- "zerocopy 0.8.24",
 ]
 
 [[package]]
@@ -1573,6 +1605,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vfio-bindings"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a21f546f2bda37f5a8cfb138c87f95b8e34d2d78d6a7a92ba3785f4e08604a7"
+dependencies = [
+ "vmm-sys-util",
+]
+
+[[package]]
+name = "vfio-bindings"
+version = "0.4.0"
+source = "git+https://github.com/Manciukic/vfio#38e482247eed6fb4c6d8d431b4156a56f9822b3f"
+
+[[package]]
+name = "vfio-ioctls"
+version = "0.2.0"
+source = "git+https://github.com/Manciukic/vfio#38e482247eed6fb4c6d8d431b4156a56f9822b3f"
+dependencies = [
+ "byteorder",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "libc",
+ "log",
+ "thiserror 1.0.69",
+ "vfio-bindings 0.4.0",
+ "vm-memory",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "vhost"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1593,6 +1655,20 @@ checksum = "5e4ce718bd4e8d74b1747363e27f715a6b1bd6971597cb21425dadbf4e712241"
 dependencies = [
  "libc",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "vm-device"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thiserror 1.0.69",
+ "vfio-ioctls",
+ "vm-memory",
+ "vmm-sys-util",
 ]
 
 [[package]]
@@ -1619,6 +1695,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3428ee25acbfc75ed14600f2043876e0889cbd57c39dd441191417377cdceda0"
 
 [[package]]
+name = "vm-system-allocator"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "vm-memory",
+]
+
+[[package]]
 name = "vmm"
 version = "0.1.0"
 dependencies = [
@@ -1629,6 +1713,7 @@ dependencies = [
  "base64",
  "bincode",
  "bitflags 2.9.0",
+ "byteorder",
  "crc64",
  "criterion",
  "derive_more",
@@ -1646,6 +1731,7 @@ dependencies = [
  "log-instrument",
  "memfd",
  "micro_http",
+ "pci",
  "proptest",
  "semver",
  "serde",
@@ -1655,11 +1741,14 @@ dependencies = [
  "timerfd",
  "userfaultfd",
  "utils",
+ "vfio-ioctls",
  "vhost",
  "vm-allocator",
+ "vm-device",
  "vm-fdt",
  "vm-memory",
  "vm-superio",
+ "vm-system-allocator",
  "vmm-sys-util",
  "zerocopy 0.8.24",
 ]
