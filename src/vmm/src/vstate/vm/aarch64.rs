@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::VmError;
 use crate::arch::aarch64::gic::GicState;
+use std::os::unix::io::AsRawFd;
 use crate::Kvm;
 
 /// Structure representing the current architecture's understand of what a "virtual machine" is.
@@ -29,12 +30,14 @@ pub enum ArchVmError {
 
 impl ArchVm {
     /// Create a new `Vm` struct.
-    pub fn new(kvm: &Kvm) -> Result<ArchVm, VmError> {
+    pub fn new(kvm: &Kvm) -> Result<(ArchVm, VmFd), VmError> {
         let fd = Self::create_vm(kvm)?;
-        Ok(ArchVm {
+        let rawfd = unsafe { libc::dup(fd.as_raw_fd()) };
+        let extra_fd = unsafe { kvm.fd.create_vmfd_from_rawfd(rawfd).unwrap() };
+        Ok((ArchVm {
             fd,
             irqchip_handle: None,
-        })
+        }, extra_fd))
     }
 
     pub(super) fn arch_pre_create_vcpus(&mut self, _: u8) -> Result<(), ArchVmError> {

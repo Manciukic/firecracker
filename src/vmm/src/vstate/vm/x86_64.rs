@@ -9,6 +9,7 @@ use kvm_bindings::{
 };
 use kvm_ioctls::VmFd;
 use serde::{Deserialize, Serialize};
+use std::os::unix::io::AsRawFd;
 
 use crate::arch::x86_64::msr::MsrError;
 use crate::utils::u64_to_usize;
@@ -52,7 +53,7 @@ pub struct ArchVm {
 
 impl ArchVm {
     /// Create a new `Vm` struct.
-    pub fn new(kvm: &crate::vstate::kvm::Kvm) -> Result<ArchVm, VmError> {
+    pub fn new(kvm: &crate::vstate::kvm::Kvm) -> Result<(Self, VmFd), VmError> {
         let fd = Self::create_vm(kvm)?;
 
         let msrs_to_save = kvm.msrs_to_save().map_err(ArchVmError::GetMsrsToSave)?;
@@ -60,7 +61,9 @@ impl ArchVm {
         fd.set_tss_address(u64_to_usize(crate::arch::x86_64::layout::KVM_TSS_ADDRESS))
             .map_err(ArchVmError::SetTssAddress)?;
 
-        Ok(ArchVm { fd, msrs_to_save })
+        let rawfd = unsafe { libc::dup(fd.as_raw_fd()) };
+        let extra_fd = unsafe { kvm.fd.create_vmfd_from_rawfd(rawfd).unwrap() };
+        Ok((ArchVm { fd, msrs_to_save }, extra_fd))
     }
 
     pub(super) fn arch_pre_create_vcpus(&mut self, _: u8) -> Result<(), ArchVmError> {
