@@ -21,11 +21,10 @@ use serde::{Deserialize, Serialize};
 use vm_allocator::AllocPolicy;
 
 use super::resources::ResourceAllocator;
-use crate::arch::DeviceType;
 use crate::arch::DeviceType::Virtio;
 #[cfg(target_arch = "aarch64")]
 use crate::arch::aarch64::DeviceInfoForFDT;
-use crate::devices::BusDevice;
+use crate::arch::{self, DeviceType};
 #[cfg(target_arch = "aarch64")]
 use crate::devices::legacy::RTCDevice;
 use crate::devices::pseudo::BootTimer;
@@ -37,6 +36,7 @@ use crate::devices::virtio::net::Net;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{TYPE_VSOCK, Vsock, VsockUnixBackend};
 use crate::devices::virtio::{TYPE_BALLOON, TYPE_BLOCK, TYPE_NET, TYPE_RNG};
+use crate::devices::{BusDevice, BusError};
 #[cfg(target_arch = "x86_64")]
 use crate::vstate::memory::GuestAddress;
 
@@ -122,6 +122,7 @@ fn add_virtio_aml(
 #[derive(Debug)]
 pub struct MMIODeviceManager {
     pub(crate) bus: crate::devices::Bus,
+    pci_bus: Option<Arc<Mutex<BusDevice>>>,
     pub(crate) id_to_dev_info: HashMap<(DeviceType, String), MMIODeviceInfo>,
     // We create the AML byte code for every VirtIO device in the order we build
     // it, so that we ensure the root block device is appears first in the DSDT.
@@ -138,6 +139,7 @@ impl MMIODeviceManager {
     /// Create a new DeviceManager handling mmio devices (virtio net, block).
     pub fn new() -> MMIODeviceManager {
         MMIODeviceManager {
+            pci_bus: None,
             bus: crate::devices::Bus::new(),
             id_to_dev_info: HashMap::new(),
             #[cfg(target_arch = "x86_64")]
@@ -167,6 +169,19 @@ impl MMIODeviceManager {
             irq,
         };
         Ok(device_info)
+    }
+
+    /// Register the PCI bus.
+    pub fn register_pci_bus(&mut self, pci_bus: Arc<Mutex<BusDevice>>) -> Result<(), MmioError> {
+        self.bus
+            .insert(
+                Arc::clone(&pci_bus),
+                arch::PCI_MMCONFIG_START,
+                arch::PCI_MMCONFIG_SIZE,
+            )
+            .map_err(MmioError::BusInsert)?;
+        self.pci_bus = Some(pci_bus);
+        Ok(())
     }
 
     /// Register a device at some MMIO address.
@@ -375,7 +390,7 @@ impl MMIODeviceManager {
             .id_to_dev_info
             .get(&(device_type, device_id.to_string()))
         {
-            if let Some((_, device)) = self.bus.get_device(device_info.addr) {
+            if let Some((_, _, device)) = self.bus.get_device(device_info.addr) {
                 return Some(device);
             }
         }

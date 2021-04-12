@@ -1,6 +1,8 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::os::unix::io::AsRawFd;
+
 use kvm_ioctls::VmFd;
 use serde::{Deserialize, Serialize};
 
@@ -29,12 +31,17 @@ pub enum ArchVmError {
 
 impl ArchVm {
     /// Create a new `Vm` struct.
-    pub fn new(kvm: &Kvm) -> Result<ArchVm, VmError> {
+    pub fn new(kvm: &Kvm) -> Result<(ArchVm, VmFd), VmError> {
         let fd = Self::create_vm(kvm)?;
-        Ok(ArchVm {
-            fd,
-            irqchip_handle: None,
-        })
+        let rawfd = unsafe { libc::dup(fd.as_raw_fd()) };
+        let extra_fd = unsafe { kvm.fd.create_vmfd_from_rawfd(rawfd).unwrap() };
+        Ok((
+            ArchVm {
+                fd,
+                irqchip_handle: None,
+            },
+            extra_fd,
+        ))
     }
 
     pub(super) fn arch_pre_create_vcpus(&mut self, _: u8) -> Result<(), ArchVmError> {
