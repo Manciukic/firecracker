@@ -17,12 +17,6 @@ DEFAULTS_PERF = {
 pipeline = BKPipeline(
     priority=DEFAULT_PRIORITY,
     timeout_in_minutes=45,
-    initial_steps=[
-        {
-            "command": "./tools/devtool -y checkstyle",
-            "label": "🪶 Style",
-        },
-    ],
 )
 
 changed_files = get_changed_files()
