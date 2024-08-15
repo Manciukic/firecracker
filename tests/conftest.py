@@ -391,21 +391,21 @@ rootfs_rw = pytest.fixture(rootfs_fxt, params=rootfs_params("*.ext4"))
 
 
 @pytest.fixture
-def uvm_plain(microvm_factory, guest_kernel_linux_5_10, rootfs_ubuntu_22):
+def uvm_plain(microvm_factory, guest_kernel_linux_6_1, rootfs_ubuntu_22):
     """Create a vanilla VM, non-parametrized
     kernel: 5.10
     rootfs: Ubuntu 22.04
     """
-    return microvm_factory.build(guest_kernel_linux_5_10, rootfs_ubuntu_22)
+    return microvm_factory.build(guest_kernel_linux_6_1, rootfs_ubuntu_22)
 
 
 @pytest.fixture
-def uvm_plain_rw(microvm_factory, guest_kernel_linux_5_10, rootfs_rw):
+def uvm_plain_rw(microvm_factory, guest_kernel_linux_6_1, rootfs_rw):
     """Create a vanilla VM, non-parametrized
     kernel: 5.10
     rootfs: Ubuntu 22.04
     """
-    return microvm_factory.build(guest_kernel_linux_5_10, rootfs_rw)
+    return microvm_factory.build(guest_kernel_linux_6_1, rootfs_rw)
 
 
 @pytest.fixture
@@ -435,13 +435,13 @@ def uvm_plain_any(microvm_factory, guest_kernel, rootfs_ubuntu_22):
 
 @pytest.fixture
 def uvm_with_initrd(
-    microvm_factory, guest_kernel_linux_5_10, record_property, artifact_dir
+    microvm_factory, guest_kernel_linux_6_1, record_property, artifact_dir
 ):
     """
     See file:../docs/initrd.md
     """
     fs = artifact_dir / "initramfs.cpio"
     record_property("rootfs", fs.name)
-    uvm = microvm_factory.build(guest_kernel_linux_5_10)
+    uvm = microvm_factory.build(guest_kernel_linux_6_1)
     uvm.initrd_file = fs
     yield uvm
