@@ -82,4 +82,12 @@ if run_all_tests(changed_files):
         **DEFAULTS_PERF,
     )
 
+    pipeline.build_group(
+        "❓ Optional",
+        pipeline.devtool_test(
+            devtool_opts="--performance -c 1-10 -m 0",
+            pytest_opts="integration_tests/ -m 'no_block_pr and not nonci' --log-cli-level=INFO",
+        ),
+    )
+
 print(pipeline.to_json())
