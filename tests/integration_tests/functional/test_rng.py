@@ -5,6 +5,7 @@
 import pytest
 
 from framework.utils import check_entropy
+from host_tools.network import SSHConnection
 
 
 @pytest.fixture(params=[None])
@@ -22,6 +23,13 @@ def uvm_with_rng(uvm_plain, request):
     return uvm
 
 
+def list_rng_available(ssh_connection: SSHConnection) -> str:
+    """Returns a space-separated list of rng devices available in the VM"""
+    return ssh_connection.check_output(
+        "cat /sys/class/misc/hw_random/rng_available"
+    ).stdout.strip()
+
+
 def test_rng_not_present(uvm_nano):
     """
     Test a guest microVM *without* an entropy device and ensure that
@@ -32,15 +40,10 @@ def test_rng_not_present(uvm_nano):
     vm.add_net_iface()
     vm.start()
 
-    # If the guest kernel has been built with the virtio-rng module
-    # the device should exist in the guest filesystem but we should
-    # not be able to get random numbers out of it.
-    cmd = "test -e /dev/hwrng"
-    vm.ssh.check_output(cmd)
-
-    cmd = "dd if=/dev/hwrng of=/dev/null bs=10 count=1"
-    ecode, _, _ = vm.ssh.run(cmd)
-    assert ecode == 1
+    rng_available = list_rng_available(vm.ssh)
+    assert (
+        "virtio_rng" not in rng_available
+    ), "virtio_rng device should not be available in the uvm"
 
 
 def test_rng_present(uvm_with_rng):
