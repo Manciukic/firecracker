@@ -9,6 +9,7 @@
 
 use std::collections::btree_map::BTreeMap;
 use std::result;
+
 use vm_memory::{Address, GuestAddress, GuestUsize};
 
 #[derive(Debug)]
@@ -28,10 +29,16 @@ pub type Result<T> = result::Result<T, Error>;
 /// ```
 /// # use vm_allocator::AddressAllocator;
 /// # use vm_memory::{Address, GuestAddress, GuestUsize};
-///   AddressAllocator::new(GuestAddress(0x1000), 0x10000).map(|mut pool| {
-///       assert_eq!(pool.allocate(None, 0x110, Some(0x100)), Some(GuestAddress(0x10e00)));
-///       assert_eq!(pool.allocate(None, 0x100, Some(0x100)), Some(GuestAddress(0x10d00)));
-///   });
+/// AddressAllocator::new(GuestAddress(0x1000), 0x10000).map(|mut pool| {
+///     assert_eq!(
+///         pool.allocate(None, 0x110, Some(0x100)),
+///         Some(GuestAddress(0x10e00))
+///     );
+///     assert_eq!(
+///         pool.allocate(None, 0x100, Some(0x100)),
+///         Some(GuestAddress(0x10d00))
+///     );
+/// });
 /// ```
 #[derive(Debug, Eq, PartialEq)]
 pub struct AddressAllocator {
@@ -201,6 +208,16 @@ impl AddressAllocator {
             }
         }
     }
+
+    /// Start address of the allocator
+    pub fn base(&self) -> GuestAddress {
+        self.base
+    }
+
+    /// Last address of the allocator
+    pub fn end(&self) -> GuestAddress {
+        self.end
+    }
 }
 
 #[cfg(test)]
@@ -209,10 +226,7 @@ mod tests {
 
     #[test]
     fn new_fails_overflow() {
-        assert_eq!(
-            AddressAllocator::new(GuestAddress(u64::max_value()), 0x100),
-            None
-        );
+        assert_eq!(AddressAllocator::new(GuestAddress(u64::MAX), 0x100), None);
     }
 
     #[test]

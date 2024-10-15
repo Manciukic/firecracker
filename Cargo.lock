@@ -983,6 +983,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "mshv-bindings"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9c369385758f81ca937414dc2147737c92032e4fb399669f287abf94d89252d"
+dependencies = [
+ "libc",
+ "num_enum",
+ "serde",
+ "serde_derive",
+ "vmm-sys-util",
+ "zerocopy 0.8.24",
+]
+
+[[package]]
+name = "mshv-ioctls"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53efb6110ead2e8788f79f2455b21464cb416ba9154112527b11584cb7fceea6"
+dependencies = [
+ "libc",
+ "mshv-bindings",
+ "thiserror 2.0.12",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "nix"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1010,6 +1036,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "num_enum"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e613fc340b2220f734a8595782c551f1250e969d87d3be1ae0579e8d4065179"
+dependencies = [
+ "num_enum_derive",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af1844ef2428cc3e1cb900be36181049ef3d3193c63e43026cfe202983b27a56"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1046,7 +1092,9 @@ dependencies = [
  "kvm-ioctls",
  "libc",
  "log",
- "vfio-bindings 0.2.0",
+ "serde",
+ "thiserror 1.0.69",
+ "vfio-bindings",
  "vfio-ioctls",
  "vm-device",
  "vm-memory",
@@ -1606,17 +1654,11 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vfio-bindings"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a21f546f2bda37f5a8cfb138c87f95b8e34d2d78d6a7a92ba3785f4e08604a7"
+version = "0.4.0"
+source = "git+https://github.com/Manciukic/vfio#38e482247eed6fb4c6d8d431b4156a56f9822b3f"
 dependencies = [
  "vmm-sys-util",
 ]
-
-[[package]]
-name = "vfio-bindings"
-version = "0.4.0"
-source = "git+https://github.com/Manciukic/vfio#38e482247eed6fb4c6d8d431b4156a56f9822b3f"
 
 [[package]]
 name = "vfio-ioctls"
@@ -1628,8 +1670,10 @@ dependencies = [
  "kvm-ioctls",
  "libc",
  "log",
+ "mshv-bindings",
+ "mshv-ioctls",
  "thiserror 1.0.69",
- "vfio-bindings 0.4.0",
+ "vfio-bindings",
  "vm-memory",
  "vmm-sys-util",
 ]
@@ -1663,8 +1707,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
- "serde_derive",
- "serde_json",
  "thiserror 1.0.69",
  "vfio-ioctls",
  "vm-memory",

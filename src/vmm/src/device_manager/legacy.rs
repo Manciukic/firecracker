@@ -13,6 +13,7 @@ use acpi_tables::aml::AmlError;
 use acpi_tables::{Aml, aml};
 use kvm_ioctls::VmFd;
 use libc::EFD_NONBLOCK;
+use pci::{PCI_CONFIG_IO_PORT, PCI_CONFIG_IO_PORT_SIZE};
 use vm_superio::Serial;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -128,7 +129,11 @@ impl PortIODeviceManager {
             ),
             input: None,
         })));
-        self.io_bus.insert(self.pci_bus.clone(), 0xcf8, 0x8)?;
+        self.io_bus.insert(
+            self.pci_bus.clone(),
+            PCI_CONFIG_IO_PORT,
+            PCI_CONFIG_IO_PORT_SIZE,
+        )?;
         self.io_bus.insert(
             self.stdio_serial.clone(),
             Self::SERIAL_PORT_ADDRESSES[0],
