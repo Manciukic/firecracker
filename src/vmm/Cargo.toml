@@ -27,7 +27,7 @@ seccompiler = { path = "../seccompiler" }
 snapshot = { path = "../snapshot"}
 utils = { path = "../utils" }
 pci = { path = "../pci"}
-vfio-ioctls = { git = "https://github.com/rust-vmm/vfio-ioctls", branch = "master" }
+vfio-ioctls = { git = "https://github.com/rust-vmm/vfio-ioctls", branch = "main" }
 vm-allocator = { path = "../vm-allocator"}
 vm-device = { path = "../vm-device"}
 

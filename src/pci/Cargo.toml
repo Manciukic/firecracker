@@ -12,7 +12,7 @@ libc = ">=0.2.39"
 vm-memory = { path = "../vm-memory" }
 devices = { path = "../devices" }
 logger = { path = "../logger" }
-vfio-ioctls = { git = "https://github.com/rust-vmm/vfio-ioctls", branch = "master" }
+vfio-ioctls = { git = "https://github.com/rust-vmm/vfio-ioctls", branch = "main" }
 kvm-bindings = { version = ">=0.4.0", features = ["fam-wrappers"] }
 kvm-ioctls = ">=0.8.0"
 arch = { path = "../arch"}

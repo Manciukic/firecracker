@@ -571,7 +571,7 @@ dependencies = [
  "libc",
  "logger",
  "vfio-bindings",
- "vfio-ioctls",
+ "vfio-ioctls 0.1.0 (git+https://github.com/rust-vmm/vfio-ioctls?branch=main)",
  "vm-allocator",
  "vm-device",
  "vm-memory 0.1.0",
@@ -1042,6 +1042,22 @@ dependencies = [
 [[package]]
 name = "vfio-ioctls"
 version = "0.1.0"
+source = "git+https://github.com/rust-vmm/vfio-ioctls?branch=main#19e5b83ddfad430109ce3e8d51f4a24796099127"
+dependencies = [
+ "byteorder",
+ "kvm-bindings",
+ "kvm-ioctls",
+ "libc",
+ "log",
+ "thiserror",
+ "vfio-bindings",
+ "vm-memory 0.11.0",
+ "vmm-sys-util",
+]
+
+[[package]]
+name = "vfio-ioctls"
+version = "0.1.0"
 source = "git+https://github.com/rust-vmm/vfio-ioctls?branch=master#ed8d2534576371000361e615eeb91b4266c55713"
 dependencies = [
  "byteorder",
@@ -1075,7 +1091,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "thiserror",
- "vfio-ioctls",
+ "vfio-ioctls 0.1.0 (git+https://github.com/rust-vmm/vfio-ioctls?branch=master)",
  "vm-memory 0.4.0",
  "vmm-sys-util",
 ]
@@ -1094,6 +1110,16 @@ name = "vm-memory"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45b5b0a6f371f8147143b1adb95edddafc9cb9e40adaf94edb6f93a1d04b0330"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
+name = "vm-memory"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d6ea57fe00f9086c59eeeb68e102dd611686bc3c28520fa465996d4d4bdce07"
 dependencies = [
  "libc",
  "winapi",
@@ -1130,7 +1156,7 @@ dependencies = [
  "utils",
  "versionize",
  "versionize_derive",
- "vfio-ioctls",
+ "vfio-ioctls 0.1.0 (git+https://github.com/rust-vmm/vfio-ioctls?branch=main)",
  "vm-allocator",
  "vm-device",
  "vm-memory 0.1.0",

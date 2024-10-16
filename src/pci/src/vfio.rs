@@ -678,7 +678,8 @@ impl VfioPciDevice {
                 if region_flags & VFIO_REGION_INFO_FLAG_WRITE != 0 {
                     prot |= libc::PROT_WRITE;
                 }
-                let (mmap_offset, mmap_size) = self.device.get_region_mmap(region.index);
+                let mmap_offset = self.device.get_region_offset(region.index);
+                let mmap_size = self.device.get_region_size(region.index);
                 
                 let offset = self.device.get_region_offset(region.index) + mmap_offset;
                 error!(
@@ -750,7 +751,7 @@ impl VfioPciDevice {
             if let (Some(host_addr), Some(mmap_size), Some(mem_slot)) =
                 (region.host_addr, region.mmap_size, region.mem_slot)
             {
-                let (mmap_offset, _) = self.device.get_region_mmap(region.index);
+                let mmap_offset = self.device.get_region_offset(region.index);
 
                 // Remove region
                 let r = Self::make_user_memory_region(
@@ -1185,8 +1186,9 @@ impl PciDevice for VfioPciDevice {
 
                 if let Some(mem_slot) = region.mem_slot {
                     if let Some(host_addr) = region.host_addr {
-                        let (mmap_offset, mmap_size) = self.device.get_region_mmap(region.index);
-
+                        let mmap_offset = self.device.get_region_offset(region.index);
+                        let mmap_size = self.device.get_region_size(region.index);
+        
                         // Remove old region
                         let old_mem_region = Self::make_user_memory_region(
                             mem_slot,
