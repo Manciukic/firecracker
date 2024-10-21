@@ -86,6 +86,7 @@ pub mod dumbo;
 /// Support for GDB debugging the guest
 #[cfg(feature = "gdb")]
 pub mod gdb;
+/// Interrupts
 pub mod interrupt;
 /// Logger
 pub mod logger;
