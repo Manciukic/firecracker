@@ -44,6 +44,7 @@ use vmm_sys_util::eventfd::EventFd;
 use crate::acpi;
 use crate::arch::{
     BootProtocol, EntryPoint, InitrdConfig, MEM_32BIT_DEVICES_SIZE, MEM_32BIT_DEVICES_START,
+    PCI_MMCONFIG_START,
 };
 #[cfg(target_arch = "aarch64")]
 use crate::construct_kvm_mpidrs;
@@ -1151,6 +1152,7 @@ pub fn configure_system_for_boot(
             &mut vmm.resource_allocator,
             &vmm.mmio_device_manager,
             &vmm.acpi_device_manager,
+            PCI_MMCONFIG_START,
             vcpus,
         )?;
     }
