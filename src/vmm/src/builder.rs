@@ -1147,6 +1147,7 @@ pub fn configure_system_for_boot(
             &mut vmm.resource_allocator,
             &vmm.mmio_device_manager,
             &vmm.acpi_device_manager,
+            &vmm.pci_segment,
             PCI_MMCONFIG_START,
             vcpus,
         )?;
