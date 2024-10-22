@@ -45,7 +45,7 @@ use linux_loader::loader::elf::start_info::{
 use linux_loader::loader::{Cmdline, KernelLoader, PvhBootCapability, load_cmdline};
 use log::debug;
 
-use super::EntryPoint;
+use super::{EntryPoint, PCI_MMCONFIG_START};
 use crate::acpi::create_acpi_tables;
 use crate::arch::{BootProtocol, SYSTEM_MEM_SIZE, SYSTEM_MEM_START};
 use crate::cpu_config::templates::{CustomCpuTemplate, GuestConfigError};
@@ -215,6 +215,7 @@ pub fn configure_system_for_boot(
         &mut vmm.resource_allocator,
         &vmm.mmio_device_manager,
         &vmm.acpi_device_manager,
+        PCI_MMCONFIG_START,
         vcpus,
     )?;
     Ok(())
