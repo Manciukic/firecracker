@@ -33,7 +33,7 @@ pub mod generated;
 
 use std::fs::File;
 
-use layout::CMDLINE_START;
+use layout::{CMDLINE_START, PCI_MMCONFIG_SIZE};
 use linux_loader::configurator::linux::LinuxBootConfigurator;
 use linux_loader::configurator::pvh::PvhBootConfigurator;
 use linux_loader::configurator::{BootConfigurator, BootParams};
@@ -359,6 +359,13 @@ fn configure_64bit_boot(
         &mut params,
         layout::SYSTEM_MEM_START,
         layout::SYSTEM_MEM_SIZE,
+        E820_RESERVED,
+    )?;
+
+    add_e820_entry(
+        &mut params,
+        layout::PCI_MMCONFIG_START,
+        PCI_MMCONFIG_SIZE,
         E820_RESERVED,
     )?;
 
