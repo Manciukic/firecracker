@@ -9,7 +9,8 @@ license = "Apache-2.0"
 bench = false
 
 [dependencies]
-acpi_tables = { path = "../acpi-tables" }
+anyhow = "1.0.87"
+acpi_tables = { path = "../acpi-tables" } 
 aes-gcm =  { version = "0.10.1", default-features = false, features = ["aes"] }
 arrayvec = { version = "0.7.6", optional = true }
 aws-lc-rs = { version = "1.12.6", features = ["bindgen"] }
@@ -41,6 +42,7 @@ thiserror = "2.0.12"
 timerfd = "1.5.0"
 userfaultfd = "0.8.1"
 utils = { path = "../utils" }
+uuid = "1.8.0"
 vfio-ioctls = {  git = "https://github.com/Manciukic/vfio", commit = "38e4822" }
 vhost = { version = "0.13.0", features = ["vhost-user-frontend"] }
 vm-allocator = "0.1.0"

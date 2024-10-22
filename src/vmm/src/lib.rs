@@ -123,6 +123,7 @@ use std::time::Duration;
 use device_manager::acpi::ACPIDeviceManager;
 use device_manager::resources::ResourceAllocator;
 use devices::acpi::vmgenid::VmGenIdError;
+use devices::pci_segment::PciSegment;
 use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
 use kvm_bindings::{kvm_irq_routing, kvm_irq_routing_entry as IrqRoutingEntry};
 use seccomp::BpfProgram;
@@ -329,6 +330,7 @@ pub struct Vmm {
     #[cfg(target_arch = "x86_64")]
     pio_device_manager: PortIODeviceManager,
     acpi_device_manager: ACPIDeviceManager,
+    pci_segment: PciSegment,
 }
 
 impl Vmm {
