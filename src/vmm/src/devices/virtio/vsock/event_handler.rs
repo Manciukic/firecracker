@@ -197,8 +197,8 @@ where
                 Self::PROCESS_RXQ => queue_index = RXQ_INDEX,
                 Self::PROCESS_TXQ => queue_index = TXQ_INDEX,
                 Self::PROCESS_EVQ => queue_index = EVQ_INDEX,
-                Self::PROCESS_NOTIFY_BACKEND => queue_index = TXQ_INDEX, /* TODO this could be
-                                                                           * either tx or rx */
+                Self::PROCESS_NOTIFY_BACKEND => queue_index = TXQ_INDEX, // TODO this could be
+                // either tx or rx
                 _ => warn!("Unexpected vsock event received: {:?}", source),
             }
             if raise_irq {
