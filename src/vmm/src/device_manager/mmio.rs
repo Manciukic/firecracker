@@ -64,6 +64,8 @@ pub enum MmioError {
     #[cfg(target_arch = "x86_64")]
     /// Failed to create AML code for device
     AmlError(#[from] aml::AmlError),
+    /// Unknown TODO
+    Unknown,
 }
 
 /// This represents the size of the mmio device specified to the kernel through ACPI and as a
