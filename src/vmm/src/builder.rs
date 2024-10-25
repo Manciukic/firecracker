@@ -26,7 +26,7 @@ use linux_loader::loader::elf::PvhBootCapability;
 #[cfg(target_arch = "aarch64")]
 use linux_loader::loader::pe::PE as Loader;
 use pci::{
-    DeviceRelocation, PciBarConfiguration, PciBarRegionType, PciBdf, PciDevice, VfioPciDevice,
+    PciBarConfiguration, PciBarRegionType, PciBdf, PciConfigIo, VfioPciDevice,
 };
 use userfaultfd::Uffd;
 use utils::time::TimestampUs;
@@ -491,22 +491,18 @@ fn create_vmm_and_vcpus(
             .map_err(VmmError::EventFd)
             .map_err(Internal)?;
 
-        let pci_config_io = Arc::new(Mutex::new(BusDevice::PioPciBus(PciConfigIo::new(
-            Arc::clone(&pci_segment.pci_bus),
-        ))));
-
         // TODO Remove these unwraps.
-        let mut pio_dev_mgr =
-            PortIODeviceManager::new(serial_device, reset_evt, pci_config_io).unwrap();
+        let mut pio_dev_mgr = PortIODeviceManager::new(serial_device, reset_evt).unwrap();
         pio_dev_mgr.register_devices(vm.fd()).unwrap();
         pio_dev_mgr
     };
 
+    let device_fd = create_passthrough_device(vm.fd());
     let address_manager = Arc::new(AddressManager {
         allocator: allocator.clone(),
         io_bus: Arc::new(pio_device_manager.io_bus.clone()),
         mmio_bus: Arc::new(mmio_device_manager.bus.clone()),
-        vm: vm_fd,
+        vm: vm_fd.clone(),
         pci_mmio32_allocators: vec![pci_mmio32_allocator.clone()],
         pci_mmio64_allocators: vec![pci_mmio64_allocator.clone()],
     });

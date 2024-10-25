@@ -23,14 +23,16 @@ use super::request::*;
 use super::{BLOCK_QUEUE_SIZES, SECTOR_SHIFT, SECTOR_SIZE, VirtioBlockError, io as block_io};
 use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMetricsPerDevice};
-use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
+use crate::devices::virtio::device::{
+    DeviceState, IrqTrigger, IrqType, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
+};
 use crate::devices::virtio::generated::virtio_blk::{
     VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES, VIRTIO_F_VERSION_1,
 };
 use crate::devices::virtio::generated::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use crate::devices::virtio::queue::Queue;
 use crate::devices::virtio::{ActivateError, TYPE_BLOCK};
-use crate::logger::{IncMetric, error, warn};
+use crate::logger::{IncMetric, debug, error, warn};
 use crate::rate_limiter::{BucketUpdate, RateLimiter};
 use crate::utils::u64_to_usize;
 use crate::vmm_config::RateLimiterConfig;
@@ -248,7 +250,7 @@ pub struct VirtioBlock {
     pub queues: Vec<Queue>,
     pub queue_evts: [EventFd; 1],
     pub device_state: DeviceState,
-    pub irq_trigger: IrqTrigger,
+    pub virtio_interrupt: Option<Arc<dyn VirtioInterrupt>>,
 
     // Implementation specific fields.
     pub id: String,
@@ -321,7 +323,9 @@ impl VirtioBlock {
             queues,
             queue_evts,
             device_state: DeviceState::Inactive,
-            irq_trigger: IrqTrigger::new().map_err(VirtioBlockError::IrqTrigger)?,
+            virtio_interrupt: Some(Arc::new(
+                IrqTrigger::new().map_err(VirtioBlockError::IrqTrigger)?,
+            )),
 
             id: config.drive_id.clone(),
             partuuid: config.partuuid,
@@ -384,10 +388,11 @@ impl VirtioBlock {
     }
 
     fn add_used_descriptor(
+        queue_index: usize,
         queue: &mut Queue,
         index: u16,
         len: u32,
-        irq_trigger: &IrqTrigger,
+        interrupt: Arc<dyn VirtioInterrupt>,
         block_metrics: &BlockDeviceMetrics,
     ) {
         queue.add_used(index, len).unwrap_or_else(|err| {
@@ -395,9 +400,11 @@ impl VirtioBlock {
         });
 
         if queue.prepare_kick() {
-            irq_trigger.trigger_irq(IrqType::Vring).unwrap_or_else(|_| {
-                block_metrics.event_fails.inc();
-            });
+            interrupt
+                .trigger(VirtioInterruptType::Queue(queue_index as u16))
+                .unwrap_or_else(|_| {
+                    block_metrics.event_fails.inc();
+                });
         }
     }
 
@@ -443,10 +450,14 @@ impl VirtioBlock {
                 }
                 ProcessingResult::Executed(finished) => {
                     Self::add_used_descriptor(
+                        queue_index,
                         queue,
                         head.index,
                         finished.num_bytes_to_mem,
-                        &self.irq_trigger,
+                        self.virtio_interrupt
+                            .as_ref()
+                            .expect("interrupt must be set up")
+                            .clone(),
                         &self.metrics,
                     );
                 }
@@ -469,7 +480,8 @@ impl VirtioBlock {
 
         // This is safe since we checked in the event handler that the device is activated.
         let mem = self.device_state.mem().unwrap();
-        let queue = &mut self.queues[0];
+        let queue_index = 0;
+        let queue = &mut self.queues[queue_index];
 
         loop {
             match engine.pop(mem) {
@@ -494,10 +506,14 @@ impl VirtioBlock {
                     let finished = pending.finish(mem, res, &self.metrics);
 
                     Self::add_used_descriptor(
+                        queue_index,
                         queue,
                         finished.desc_idx,
                         finished.num_bytes_to_mem,
-                        &self.irq_trigger,
+                        self.virtio_interrupt
+                            .as_ref()
+                            .expect("interrupt must be set up")
+                            .clone(),
                         &self.metrics,
                     );
                 }
@@ -526,7 +542,11 @@ impl VirtioBlock {
         self.config_space.capacity = self.disk.nsectors.to_le(); // virtio_block_config_space();
 
         // Kick the driver to pick up the changes.
-        self.irq_trigger.trigger_irq(IrqType::Config).unwrap();
+        self.virtio_interrupt
+            .as_ref()
+            .expect("interrupt must be set up")
+            .trigger(VirtioInterruptType::Config)
+            .unwrap();
 
         self.metrics.update_count.inc();
         Ok(())
@@ -593,8 +613,11 @@ impl VirtioDevice for VirtioBlock {
         &self.queue_evts
     }
 
-    fn interrupt_trigger(&self) -> &IrqTrigger {
-        &self.irq_trigger
+    fn interrupt(&self) -> Arc<dyn VirtioInterrupt> {
+        self.virtio_interrupt
+            .as_ref()
+            .expect("interrupt must be set up")
+            .clone()
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
@@ -623,7 +646,13 @@ impl VirtioDevice for VirtioBlock {
         dst.copy_from_slice(data);
     }
 
-    fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
+    fn activate(
+        &mut self,
+        mem: GuestMemoryMmap,
+        virtio_interrupt: Option<Arc<dyn VirtioInterrupt>>,
+    ) -> Result<(), ActivateError> {
+        self.virtio_interrupt = virtio_interrupt.or(self.virtio_interrupt.take());
+
         for q in self.queues.iter_mut() {
             q.initialize(&mem)
                 .map_err(ActivateError::QueueMemoryError)?;
@@ -641,6 +670,7 @@ impl VirtioDevice for VirtioBlock {
             return Err(ActivateError::EventFd);
         }
         self.device_state = DeviceState::Activated(mem);
+        debug!("VirtioBlock activated");
         Ok(())
     }
 
@@ -860,7 +890,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
 
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
@@ -888,7 +918,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
 
@@ -951,7 +981,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
 
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
@@ -1002,7 +1032,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
 
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
@@ -1034,7 +1064,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
             vq.dtable[1].set(0xf000, 0x1000, VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 2);
 
@@ -1070,7 +1100,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
 
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
@@ -1117,7 +1147,7 @@ mod tests {
                 let mem = default_mem();
                 let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
                 set_queue(&mut block, 0, vq.create_queue());
-                block.activate(mem.clone()).unwrap();
+                block.activate(mem.clone(), None).unwrap();
                 read_blk_req_descriptors(&vq);
                 let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
 
@@ -1356,7 +1386,7 @@ mod tests {
                 let mem = default_mem();
                 let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
                 set_queue(&mut block, 0, vq.create_queue());
-                block.activate(mem.clone()).unwrap();
+                block.activate(mem.clone(), None).unwrap();
                 read_blk_req_descriptors(&vq);
                 vq.dtable[1].set(0xff00, 0x1000, VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 2);
 
@@ -1397,7 +1427,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
 
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
@@ -1443,7 +1473,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
 
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
@@ -1566,7 +1596,7 @@ mod tests {
 
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, IO_URING_NUM_ENTRIES * 4);
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
 
             // Run scenario that doesn't trigger FullSq BlockError: Add sq_size flush requests.
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES);
@@ -1599,7 +1629,7 @@ mod tests {
 
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, IO_URING_NUM_ENTRIES * 4);
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
 
             // Run scenario that triggers FullCqError. Push 2 * IO_URING_NUM_ENTRIES and wait for
             // completion. Then try to push another entry.
@@ -1628,7 +1658,7 @@ mod tests {
 
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
 
             // Add a batch of flush requests.
             add_flush_requests_batch(&mut block, &vq, 5);
@@ -1647,7 +1677,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
 
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());
@@ -1716,7 +1746,7 @@ mod tests {
             let mem = default_mem();
             let vq = VirtQueue::new(GuestAddress(0), &mem, 16);
             set_queue(&mut block, 0, vq.create_queue());
-            block.activate(mem.clone()).unwrap();
+            block.activate(mem.clone(), None).unwrap();
             read_blk_req_descriptors(&vq);
 
             let request_type_addr = GuestAddress(vq.dtable[0].addr.get());

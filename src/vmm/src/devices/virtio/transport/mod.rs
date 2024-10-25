@@ -7,5 +7,5 @@ use vmm_sys_util::eventfd::EventFd;
 // mod pci_device;
 pub(crate) mod mmio;
 pub use mmio::MmioTransport;
-pub use pci_common_config::{VIRTIO_PCI_COMMON_CONFIG_ID, VirtioPciCommonConfig};
-pub use pci_device::{VirtioPciDevice, VirtioPciDeviceError};
+// pub use pci_common_config::{VirtioPciCommonConfig, VIRTIO_PCI_COMMON_CONFIG_ID};
+// pub use pci_device::{VirtioPciDevice, VirtioPciDeviceError};
