@@ -65,7 +65,7 @@ use super::legacy::RTCDevice;
 use super::legacy::{I8042Device, SerialDevice};
 use pci::{PciConfigIo, PciConfigMmio, PciRoot};
 use super::pseudo::BootTimer;
-use super::virtio::mmio::MmioTransport;
+use super::virtio::transport::MmioTransport;
 
 #[derive(Debug)]
 pub enum BusDevice {

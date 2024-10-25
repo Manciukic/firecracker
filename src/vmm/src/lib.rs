@@ -124,12 +124,12 @@ use device_manager::acpi::ACPIDeviceManager;
 use device_manager::resources::ResourceAllocator;
 use devices::acpi::vmgenid::VmGenIdError;
 use devices::pci_segment::PciSegment;
-use devices::virtio::transport::VirtioPciDevice;
+// use devices::virtio::transport::VirtioPciDevice;
 use devices::Bus;
 use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
 use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
 use pci::{DeviceRelocation, PciBarRegionType, PciDevice};
-use seccompiler::BpfProgram;
+use seccomp::BpfProgram;
 use userfaultfd::Uffd;
 use vm_device::interrupt::{InterruptManager, MsiIrqGroupConfig};
 use vm_memory::{GuestAddress, GuestUsize};
@@ -1103,37 +1103,37 @@ impl DeviceRelocation for AddressManager {
         }
 
         let any_dev = pci_dev.as_any();
-        if let Some(virtio_pci_dev) = any_dev.downcast_ref::<VirtioPciDevice>() {
-            let bar_addr = virtio_pci_dev.config_bar_addr();
-            if bar_addr == new_base {
-                const NOTIFICATION_BAR_OFFSET: u64 = 0x6000;
-                const NOTIFY_OFF_MULTIPLIER: u32 = 4; // A dword per notification address.
+        // if let Some(virtio_pci_dev) = any_dev.downcast_ref::<VirtioPciDevice>() {
+        //     let bar_addr = virtio_pci_dev.config_bar_addr();
+        //     if bar_addr == new_base {
+        //         const NOTIFICATION_BAR_OFFSET: u64 = 0x6000;
+        //         const NOTIFY_OFF_MULTIPLIER: u32 = 4; // A dword per notification address.
 
-                let notify_base = old_base + NOTIFICATION_BAR_OFFSET;
-                for (i, queue_evt) in virtio_pci_dev.virtio_device().lock().unwrap().queue_events().iter().enumerate() {
-                    let addr = notify_base + i as u64 * u64::from(NOTIFY_OFF_MULTIPLIER);
-                    let io_addr = IoEventAddress::Mmio(addr);
-                    self.vm.lock().unwrap().unregister_ioevent(queue_evt, &io_addr, NoDatamatch).map_err(|e| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("failed to unregister ioevent: {e:?}"),
-                        )
-                    })?;
-                }
-                for (i, queue_evt) in virtio_pci_dev.virtio_device().lock().unwrap().queue_events().iter().enumerate() {
-                    let addr = notify_base + i as u64 * u64::from(NOTIFY_OFF_MULTIPLIER);
-                    let io_addr = IoEventAddress::Mmio(addr);
-                    self.vm.lock().unwrap()
-                        .register_ioevent(queue_evt, &io_addr, NoDatamatch)
-                        .map_err(|e| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                format!("failed to register ioevent: {e:?}"),
-                            )
-                        })?;                
-                }
-            } 
-        }
+        //         let notify_base = old_base + NOTIFICATION_BAR_OFFSET;
+        //         for (i, queue_evt) in virtio_pci_dev.virtio_device().lock().unwrap().queue_events().iter().enumerate() {
+        //             let addr = notify_base + i as u64 * u64::from(NOTIFY_OFF_MULTIPLIER);
+        //             let io_addr = IoEventAddress::Mmio(addr);
+        //             self.vm.lock().unwrap().unregister_ioevent(queue_evt, &io_addr, NoDatamatch).map_err(|e| {
+        //                 io::Error::new(
+        //                     io::ErrorKind::Other,
+        //                     format!("failed to unregister ioevent: {e:?}"),
+        //                 )
+        //             })?;
+        //         }
+        //         for (i, queue_evt) in virtio_pci_dev.virtio_device().lock().unwrap().queue_events().iter().enumerate() {
+        //             let addr = notify_base + i as u64 * u64::from(NOTIFY_OFF_MULTIPLIER);
+        //             let io_addr = IoEventAddress::Mmio(addr);
+        //             self.vm.lock().unwrap()
+        //                 .register_ioevent(queue_evt, &io_addr, NoDatamatch)
+        //                 .map_err(|e| {
+        //                     io::Error::new(
+        //                         io::ErrorKind::Other,
+        //                         format!("failed to register ioevent: {e:?}"),
+        //                     )
+        //                 })?;                
+        //         }
+        //     } 
+        // }
 
         pci_dev.move_bar(old_base, new_base)
     }
