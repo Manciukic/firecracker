@@ -250,8 +250,7 @@ pub struct MsiInterruptManager<IrqRoutingEntry> {
 impl Debug for MsiInterruptManager<IrqRoutingEntry> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // TODO
-        f.debug_struct("MsiInterruptManager")
-            .finish()
+        f.debug_struct("MsiInterruptManager").finish()
     }
 }
 
