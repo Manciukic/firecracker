@@ -57,6 +57,7 @@
 //! * The virtual device backend requests the interrupt manager to create an interrupt group
 //!   according to guest configuration information
 
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use vmm_sys_util::eventfd::EventFd;
@@ -146,6 +147,12 @@ pub trait InterruptManager: Send + Sync {
     /// before calling destroy_group(). This assumption helps to simplify InterruptSourceGroup
     /// implementations.
     fn destroy_group(&self, group: Arc<dyn InterruptSourceGroup>) -> Result<()>;
+}
+
+impl Debug for dyn InterruptManager<GroupConfig = MsiIrqGroupConfig> {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "MsiIrqInterruptManager")
+    }
 }
 
 pub trait InterruptSourceGroup: Send + Sync {
