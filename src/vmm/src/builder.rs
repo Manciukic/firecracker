@@ -60,6 +60,7 @@ use crate::devices::legacy::serial::SerialOut;
 use crate::devices::legacy::RTCDevice;
 use crate::devices::legacy::{EventFdTrigger, SerialEventsWrapper, SerialWrapper};
 use crate::devices::pci_segment::PciSegment;
+use crate::devices::virtio::transport::VirtioPciDevice;
 use pci::{PciBus, PciConfigIo, PciConfigMmio, PciRoot};
 use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::block::device::Block;
@@ -324,7 +325,7 @@ fn add_vfio_device(
         allocator.clone(),
         pci_device_bdf.into()
     ).unwrap();
-
+    
     // Register DMA mapping in IOMMU.
     for (_index, region) in memory.iter().enumerate() {
         info!(
@@ -456,7 +457,8 @@ fn create_vmm_and_vcpus(
     //     pci_irq_slots[i] = irqs[i % 8] as u8;
     // }
     let pci_irq_slots: [u8; 32] = [(NUM_IOAPIC_PINS-1) as u8; 32];
-    
+
+
 
     let (mut vcpus, vcpus_exit_evt) = vm
         .create_vcpus(vcpu_count)
@@ -511,16 +513,19 @@ fn create_vmm_and_vcpus(
     pio_device_manager.register_devices(vm.fd()).unwrap();
 
 
-    add_vfio_device(
-        Arc::clone(&vm_fd),
-        device_fd,
-        &pci_segment,
-        &mut mmio_device_manager,
-        &mut pio_device_manager,
-        Arc::clone(&msi_interrupt_manager),
-        guest_memory.clone(),
-        Arc::clone(&allocator)
-    );
+    // // Create passthru device for a GPU.
+    // let device_fd = create_passthrough_device(vm.fd());
+
+    // add_vfio_device(
+    //     Arc::clone(&vm_fd),
+    //     device_fd,
+    //     &pci_segment,
+    //     &mut mmio_device_manager,
+    //     &mut pio_device_manager,
+    //     Arc::clone(&msi_interrupt_manager),
+    //     guest_memory.clone(),
+    //     Arc::clone(&allocator)
+    // );
 
     // On aarch64, the vCPUs need to be created (i.e call KVM_CREATE_VCPU) before setting up the
     // IRQ chip because the `KVM_CREATE_VCPU` ioctl will return error if the IRQCHIP
@@ -549,6 +554,8 @@ fn create_vmm_and_vcpus(
         pio_device_manager,
         acpi_device_manager,
         pci_segment,
+        msi_interrupt_manager,
+        allocator,
     };
 
     Ok((vmm, vcpus))
@@ -1226,6 +1233,69 @@ fn attach_virtio_device<T: 'static + VirtioDevice + MutEventSubscriber + Debug>(
         .map(|_| ())
 }
 
+fn attach_virtio_pci_device<T: 'static + VirtioDevice + MutEventSubscriber + Debug>(
+    event_manager: &mut EventManager,
+    vmm: &mut Vmm,
+    id: String,
+    device: Arc<Mutex<T>>,
+    cmdline: &mut LoaderKernelCmdline,
+    is_vhost_user: bool,
+) -> Result<(), StartMicrovmError>{
+    event_manager.add_subscriber(device.clone());
+
+    let pci_segment_id = vmm.pci_segment.id;
+    let pci_device_bdf = vmm.pci_segment.next_device_bdf().map_err(|_| StartMicrovmError::Unknown)?;
+
+    // Allows support for one MSI-X vector per queue. It also adds 1
+    // as we need to take into account the dedicated vector to notify
+    // about a virtio config change.
+    let msix_num = (device.lock().unwrap().queues().len() + 1) as u16;
+
+    let memory = vmm.guest_memory().clone();
+
+    let device_type = device.lock().unwrap().device_type();
+    let virtio_pci_device = Arc::new(Mutex::new(
+        BusDevice::VirtioPciDevice(VirtioPciDevice::new(
+            id.clone(),
+            memory,
+            device,
+            msix_num,
+            &vmm.msi_interrupt_manager,
+            pci_device_bdf.into(),
+            // All device types *except* virtio block devices should be allocated a 64-bit bar
+            // The block devices should be given a 32-bit BAR so that they are easily accessible
+            // to firmware without requiring excessive identity mapping.
+            // The exception being if not on the default PCI segment.
+            pci_segment_id > 0 || device_type != virtio::TYPE_BLOCK,
+            None,
+        )
+        .map_err(|_| StartMicrovmError::Unknown)?,
+    )));
+
+    add_pci_device(
+        virtio_pci_device.clone(),
+        &vmm.pci_segment,
+        &mut vmm.mmio_device_manager,
+        &mut vmm.pio_device_manager,
+        vmm.allocator.clone(),
+        pci_device_bdf,
+    ).map_err(|_| StartMicrovmError::Unknown)?;
+
+    let bar_addr = virtio_pci_device.lock().unwrap().virtio_pci_device_ref().unwrap().config_bar_addr();
+    for (i, queue_evt) in virtio_pci_device.lock().unwrap().virtio_pci_device_ref().unwrap().virtio_device().lock().unwrap().queue_events().iter().enumerate() {
+        const NOTIFICATION_BAR_OFFSET: u64 = 0x6000;
+        const NOTIFY_OFF_MULTIPLIER: u32 = 4; // A dword per notification address.
+        let notify_base = bar_addr + NOTIFICATION_BAR_OFFSET;
+        let io_addr = IoEventAddress::Mmio(
+            notify_base + i as u64 * u64::from(NOTIFY_OFF_MULTIPLIER)
+        );
+        vmm.vm.fd().register_ioevent(queue_evt, &io_addr, NoDatamatch)
+            .map_err(MmioError::RegisterIoEvent)?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn attach_boot_timer_device(
     vmm: &mut Vmm,
     request_ts: TimestampUs,
@@ -1264,7 +1334,7 @@ fn attach_entropy_device(
         .id()
         .to_string();
 
-    attach_virtio_device(
+    attach_virtio_pci_device(
         event_manager,
         vmm,
         id,
@@ -1298,7 +1368,7 @@ fn attach_block_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Block>>> + Debug>(
             (locked.id().to_string(), locked.is_vhost_user())
         };
         // The device mutex mustn't be locked here otherwise it will deadlock.
-        attach_virtio_device(
+        attach_virtio_pci_device(
             event_manager,
             vmm,
             id,
@@ -1319,7 +1389,7 @@ fn attach_net_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Net>>> + Debug>(
     for net_device in net_devices {
         let id = net_device.lock().expect("Poisoned lock").id().clone();
         // The device mutex mustn't be locked here otherwise it will deadlock.
-        attach_virtio_device(event_manager, vmm, id, net_device.clone(), cmdline, false)?;
+        attach_virtio_pci_device(event_manager, vmm, id, net_device.clone(), cmdline, false)?;
     }
     Ok(())
 }
@@ -1332,7 +1402,7 @@ fn attach_unixsock_vsock_device(
 ) -> Result<(), StartMicrovmError> {
     let id = String::from(unix_vsock.lock().expect("Poisoned lock").id());
     // The device mutex mustn't be locked here otherwise it will deadlock.
-    attach_virtio_device(event_manager, vmm, id, unix_vsock.clone(), cmdline, false)
+    attach_virtio_pci_device(event_manager, vmm, id, unix_vsock.clone(), cmdline, false)
 }
 
 fn attach_balloon_device(
@@ -1343,7 +1413,7 @@ fn attach_balloon_device(
 ) -> Result<(), StartMicrovmError> {
     let id = String::from(balloon.lock().expect("Poisoned lock").id());
     // The device mutex mustn't be locked here otherwise it will deadlock.
-    attach_virtio_device(event_manager, vmm, id, balloon.clone(), cmdline, false)
+    attach_virtio_pci_device(event_manager, vmm, id, balloon.clone(), cmdline, false)
 }
 
 // Adds `O_NONBLOCK` to the stdout flags.
@@ -1503,6 +1573,32 @@ pub(crate) mod tests {
             Arc::new(DummyDeviceRelocation{}),
         ).unwrap();
 
+        let allocator = Arc::new(Mutex::new(
+            SystemAllocator::new(
+                #[cfg(target_arch = "x86_64")]
+                {
+                    GuestAddress(0)
+                },
+                #[cfg(target_arch = "x86_64")]
+                {
+                    1 << 16
+                },
+                GuestAddress(0),
+                mmio_address_space_size(46),
+                // GuestAddress(crate::arch::MEM_32BIT_DEVICES_START),
+                // crate::arch::MEM_32BIT_DEVICES_SIZE,
+                #[cfg(target_arch = "x86_64")]
+                vec![],
+            )
+            .unwrap()
+        ));
+    
+        let msi_interrupt_manager: Arc<dyn InterruptManager<GroupConfig = MsiIrqGroupConfig>> =
+        Arc::new(MsiInterruptManager::new(
+            Arc::clone(&allocator),
+            Arc::new(Mutex::new(extra_fd)),
+        ));
+
         Vmm {
             events_observer: Some(std::io::stdin()),
             instance_info: InstanceInfo::default(),
@@ -1519,6 +1615,8 @@ pub(crate) mod tests {
             pio_device_manager,
             acpi_device_manager,
             pci_segment,
+            msi_interrupt_manager,
+            allocator,
         }
     }
 
