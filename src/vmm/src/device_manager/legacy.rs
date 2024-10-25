@@ -40,7 +40,7 @@ pub struct PortIODeviceManager {
     pub stdio_serial: Arc<Mutex<BusDevice>>,
     // BusDevice::I8042Device
     pub i8042: Arc<Mutex<BusDevice>>,
-    pub pci_bus: Arc<Mutex<BusDevice>>,
+    pub pci_bus: Option<Arc<Mutex<BusDevice>>>,
 
     // Communication event on ports 1 & 3.
     pub com_evt_1_3: EventFdTrigger,
@@ -77,7 +77,6 @@ impl PortIODeviceManager {
     pub fn new(
         serial: Arc<Mutex<BusDevice>>,
         i8042_reset_evfd: EventFd,
-        pci_bus: Arc<Mutex<BusDevice>>,
     ) -> Result<Self, LegacyDeviceError> {
         debug_assert!(matches!(*serial.lock().unwrap(), BusDevice::Serial(_)));
         let io_bus = crate::devices::Bus::new();
@@ -100,11 +99,15 @@ impl PortIODeviceManager {
             io_bus,
             stdio_serial: serial,
             i8042,
-            pci_bus,
+            pci_bus: None,
             com_evt_1_3,
             com_evt_2_4,
             kbd_evt,
         })
+    }
+
+    pub fn put_pci_bus(&mut self, pci_bus: Arc<Mutex<BusDevice>>) {
+        self.pci_bus = Some(pci_bus);
     }
 
     /// Register supported legacy devices.
@@ -129,11 +132,10 @@ impl PortIODeviceManager {
             ),
             input: None,
         })));
-        self.io_bus.insert(
-            self.pci_bus.clone(),
-            PCI_CONFIG_IO_PORT,
-            PCI_CONFIG_IO_PORT_SIZE,
-        )?;
+        if let Some(ref pci_bus) = self.pci_bus {
+            self.io_bus
+                .insert(pci_bus.clone(), PCI_CONFIG_IO_PORT, PCI_CONFIG_IO_PORT_SIZE)?;
+        }
         self.io_bus.insert(
             self.stdio_serial.clone(),
             Self::SERIAL_PORT_ADDRESSES[0],
@@ -253,7 +255,6 @@ impl PortIODeviceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::devices::DummyDevice;
     use crate::vstate::vm::tests::setup_vm_with_memory;
 
     #[test]
@@ -272,7 +273,6 @@ mod tests {
                 input: None,
             }))),
             EventFd::new(libc::EFD_NONBLOCK).unwrap(),
-            Arc::new(Mutex::new(BusDevice::Dummy(DummyDevice {}))),
         )
         .unwrap();
         ldm.register_devices(vm.fd()).unwrap();
