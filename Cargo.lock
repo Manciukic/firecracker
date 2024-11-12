@@ -424,7 +424,7 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "cpu-template-helper"
-version = "1.10.0-dev"
+version = "1.11.0-dev"
 dependencies = [
  "clap",
  "displaydoc",
@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "firecracker"
-version = "1.10.0-dev"
+version = "1.11.0-dev"
 dependencies = [
  "bincode",
  "cargo_toml",
@@ -815,7 +815,7 @@ checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 
 [[package]]
 name = "jailer"
-version = "1.10.0-dev"
+version = "1.11.0-dev"
 dependencies = [
  "libc",
  "log-instrument",
@@ -898,7 +898,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "870c3814345f050991f99869417779f6062542bcf4ed81db7a1b926ad1306638"
 dependencies = [
- "vm-memory 0.16.0",
+ "vm-memory",
 ]
 
 [[package]]
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "rebase-snap"
-version = "1.10.0-dev"
+version = "1.11.0-dev"
 dependencies = [
  "displaydoc",
  "libc",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "seccompiler"
-version = "1.10.0-dev"
+version = "1.11.0-dev"
 dependencies = [
  "bincode",
  "displaydoc",
@@ -1376,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "snapshot-editor"
-version = "1.10.0-dev"
+version = "1.11.0-dev"
 dependencies = [
  "clap",
  "clap-num",
@@ -1568,7 +1568,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "vm-memory 0.16.0",
+ "vm-memory",
  "vmm-sys-util",
 ]
 
@@ -1634,14 +1634,14 @@ dependencies = [
 
 [[package]]
 name = "vhost"
-version = "0.12.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79e9f0c62b0e4d5adbb7a9dc138b6003bdf823f196a927daf7ca0ae93cafd8ce"
+checksum = "bce0aad4d8776cb64f1ac591e908a561c50ba6adac4416296efee590b155623f"
 dependencies = [
  "bitflags 2.6.0",
  "libc",
  "uuid",
- "vm-memory 0.15.0",
+ "vm-memory",
  "vmm-sys-util",
 ]
 
@@ -1672,17 +1672,6 @@ name = "vm-fdt"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e21282841a059bb62627ce8441c491f09603622cd5a21c43bfedc85a2952f23"
-
-[[package]]
-name = "vm-memory"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a320fc11792e063174402ff444aa3c80363cbf1e31c47b5ef74124406c334ce6"
-dependencies = [
- "libc",
- "thiserror",
- "winapi",
-]
 
 [[package]]
 name = "vm-memory"
@@ -1757,7 +1746,7 @@ dependencies = [
  "vm-allocator",
  "vm-device",
  "vm-fdt",
- "vm-memory 0.16.0",
+ "vm-memory",
  "vm-superio",
  "vm-system-allocator",
  "vmm-sys-util",

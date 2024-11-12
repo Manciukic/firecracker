@@ -10,6 +10,7 @@ import pytest
 
 import framework.utils_cpuid as cpuid_utils
 from framework import utils
+from framework.properties import global_props
 from framework.utils_cpuid import CPU_FEATURES_CMD, CpuModel
 
 PLATFORM = platform.machine()
@@ -81,25 +82,63 @@ def test_host_vs_guest_cpu_features_aarch64(uvm_nano):
     cpu_model = cpuid_utils.get_cpu_model_name()
     match cpu_model:
         case CpuModel.ARM_NEOVERSE_N1:
-            assert host_feats - guest_feats == set()
-            # Kernel should hide this feature, but our guest kernel
-            # currently lacks the commit with this change.
-            # The commit that introduces the change:
-            # https://github.com/torvalds/linux/commit/7187bb7d0b5c7dfa18ca82e9e5c75e13861b1d88
-            assert guest_feats - host_feats == {"ssbs"}
+            expected_guest_minus_host = set()
+            expected_host_minus_guest = set()
+
+            # Upstream kernel v6.11+ hides "ssbs" from "lscpu" on Neoverse-N1 and Neoverse-V1 since
+            # they have an errata whereby an MSR to the SSBS special-purpose register does not
+            # affect subsequent speculative instructions, permitting speculative store bypassing for
+            # a window of time.
+            # https://github.com/torvalds/linux/commit/adeec61a4723fd3e39da68db4cc4d924e6d7f641
+            #
+            # While Amazon Linux kernels (v5.10 and v6.1) backported the above commit, our test
+            # ubuntu kernel (v6.8) and our guest kernels (v5.10 and v6.1) don't pick it.
+            host_has_ssbs = global_props.host_os not in {
+                "amzn2",
+                "amzn2023",
+            } and global_props.host_linux_version_tpl < (6, 11)
+            guest_has_ssbs = vm.guest_kernel_version < (6, 11)
+
+            if host_has_ssbs and not guest_has_ssbs:
+                expected_host_minus_guest |= {"ssbs"}
+            if not host_has_ssbs and guest_has_ssbs:
+                expected_guest_minus_host |= {"ssbs"}
+
+            assert host_feats - guest_feats == expected_host_minus_guest
+            assert guest_feats - host_feats == expected_guest_minus_host
         case CpuModel.ARM_NEOVERSE_V1:
+            expected_guest_minus_host = set()
             # KVM does not enable PAC or SVE features by default
             # and Firecracker does not enable them either.
-            assert host_feats - guest_feats == {
+            expected_host_minus_guest = {
                 "paca",
                 "pacg",
                 "sve",
                 "svebf16",
                 "svei8mm",
             }
-            # kernel should hide this feature, but our guest kernel
-            # is not recent enough for this.
-            assert guest_feats - host_feats == {"ssbs"}
+
+            # Upstream kernel v6.11+ hides "ssbs" from "lscpu" on Neoverse-N1 and Neoverse-V1 since
+            # they have an errata whereby an MSR to the SSBS special-purpose register does not
+            # affect subsequent speculative instructions, permitting speculative store bypassing for
+            # a window of time.
+            # https://github.com/torvalds/linux/commit/adeec61a4723fd3e39da68db4cc4d924e6d7f641
+            #
+            # While Amazon Linux kernels (v5.10 and v6.1) backported the above commit, our test
+            # ubuntu kernel (v6.8) and our guest kernels (v5.10 and v6.1) don't pick it.
+            host_has_ssbs = global_props.host_os not in {
+                "amzn2",
+                "amzn2023",
+            } and global_props.host_linux_version_tpl < (6, 11)
+            guest_has_ssbs = vm.guest_kernel_version < (6, 11)
+
+            if host_has_ssbs and not guest_has_ssbs:
+                expected_host_minus_guest |= {"ssbs"}
+            if not host_has_ssbs and guest_has_ssbs:
+                expected_guest_minus_host |= {"ssbs"}
+
+            assert host_feats - guest_feats == expected_host_minus_guest
+            assert guest_feats - host_feats == expected_guest_minus_host
         case _:
             if os.environ.get("BUILDKITE") is not None:
                 assert False, f"Cpu model {cpu_model} is not supported"
@@ -109,12 +148,12 @@ def test_host_vs_guest_cpu_features_aarch64(uvm_nano):
     PLATFORM != "aarch64",
     reason="This is aarch64 specific test.",
 )
-def test_default_cpu_features(microvm_factory, guest_kernel, rootfs_ubuntu_22):
+def test_default_cpu_features(microvm_factory, guest_kernel, rootfs):
     """
     Check the CPU features for a microvm with the specified config.
     """
 
-    vm = microvm_factory.build(guest_kernel, rootfs_ubuntu_22, monitor_memory=False)
+    vm = microvm_factory.build(guest_kernel, rootfs, monitor_memory=False)
     vm.spawn()
     vm.basic_config()
     vm.add_net_iface()
@@ -128,13 +167,13 @@ def test_default_cpu_features(microvm_factory, guest_kernel, rootfs_ubuntu_22):
     reason="This is aarch64 specific test.",
 )
 def test_cpu_features_with_static_template(
-    microvm_factory, guest_kernel, rootfs_ubuntu_22, cpu_template
+    microvm_factory, guest_kernel, rootfs, cpu_template
 ):
     """
     Check the CPU features for a microvm with the specified config.
     """
 
-    vm = microvm_factory.build(guest_kernel, rootfs_ubuntu_22, monitor_memory=False)
+    vm = microvm_factory.build(guest_kernel, rootfs, monitor_memory=False)
     vm.spawn()
     vm.basic_config(cpu_template=cpu_template)
     vm.add_net_iface()
@@ -156,13 +195,13 @@ def test_cpu_features_with_static_template(
     reason="This is aarch64 specific test.",
 )
 def test_cpu_features_with_custom_template(
-    microvm_factory, guest_kernel, rootfs_ubuntu_22, custom_cpu_template
+    microvm_factory, guest_kernel, rootfs, custom_cpu_template
 ):
     """
     Check the CPU features for a microvm with the specified config.
     """
 
-    vm = microvm_factory.build(guest_kernel, rootfs_ubuntu_22, monitor_memory=False)
+    vm = microvm_factory.build(guest_kernel, rootfs, monitor_memory=False)
     vm.spawn()
     vm.basic_config()
     vm.api.cpu_config.put(**custom_cpu_template["template"])

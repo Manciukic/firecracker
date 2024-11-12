@@ -343,7 +343,7 @@ def test_host_vs_guest_cpu_features_x86_64(uvm_nano):
                 "umip",
             }
         case CpuModel.INTEL_CASCADELAKE:
-            assert host_feats - guest_feats == {
+            expected_host_minus_guest = {
                 "acpi",
                 "aperfmperf",
                 "arch_perfmon",
@@ -392,11 +392,32 @@ def test_host_vs_guest_cpu_features_x86_64(uvm_nano):
                 "vpid",
                 "xtpr",
             }
-            assert guest_feats - host_feats == {
+            expected_guest_minus_host = {
                 "hypervisor",
                 "tsc_known_freq",
                 "umip",
             }
+
+            # Linux kernel v6.4+ passes through the CPUID bit for "flush_l1d" to guests.
+            # https://github.com/torvalds/linux/commit/45cf86f26148e549c5ba4a8ab32a390e4bde216e
+            #
+            # Our test ubuntu host kernel is v6.8 and has the commit.
+            if global_props.host_linux_version_tpl >= (6, 4):
+                expected_host_minus_guest -= {"flush_l1d"}
+
+            # Linux kernel v6.6+ drops the "invpcid_single" synthetic feature bit.
+            # https://github.com/torvalds/linux/commit/54e3d9434ef61b97fd3263c141b928dc5635e50d
+            #
+            # Our test ubuntu host kernel is v6.8 and has the commit.
+            host_has_invpcid_single = global_props.host_linux_version_tpl < (6, 6)
+            guest_has_invpcid_single = vm.guest_kernel_version < (6, 6)
+            if host_has_invpcid_single and not guest_has_invpcid_single:
+                expected_host_minus_guest |= {"invpcid_single"}
+            if not host_has_invpcid_single and guest_has_invpcid_single:
+                expected_guest_minus_host |= {"invpcid_single"}
+
+            assert host_feats - guest_feats == expected_host_minus_guest
+            assert guest_feats - host_feats == expected_guest_minus_host
         case CpuModel.INTEL_ICELAKE:
             host_guest_diff_5_10 = {
                 "dtes64",
@@ -539,7 +560,7 @@ def msr_cpu_template_fxt(request):
 @pytest.mark.timeout(900)
 @pytest.mark.nonci
 def test_cpu_rdmsr(
-    microvm_factory, msr_cpu_template, guest_kernel, rootfs_ubuntu_22, results_dir
+    microvm_factory, msr_cpu_template, guest_kernel, rootfs, results_dir
 ):
     """
     Test MSRs that are available to the guest.
@@ -574,7 +595,7 @@ def test_cpu_rdmsr(
     """
 
     vcpus, guest_mem_mib = 1, 1024
-    vm = microvm_factory.build(guest_kernel, rootfs_ubuntu_22, monitor_memory=False)
+    vm = microvm_factory.build(guest_kernel, rootfs, monitor_memory=False)
     vm.spawn()
     vm.add_net_iface()
     vm.basic_config(
@@ -643,9 +664,7 @@ def dump_msr_state_to_file(dump_fname, ssh_conn, shared_names):
 )
 @pytest.mark.timeout(900)
 @pytest.mark.nonci
-def test_cpu_wrmsr_snapshot(
-    microvm_factory, guest_kernel, rootfs_ubuntu_22, msr_cpu_template
-):
+def test_cpu_wrmsr_snapshot(microvm_factory, guest_kernel, rootfs, msr_cpu_template):
     """
     This is the first part of the test verifying
     that MSRs retain their values after restoring from a snapshot.
@@ -665,7 +684,7 @@ def test_cpu_wrmsr_snapshot(
     shared_names = SNAPSHOT_RESTORE_SHARED_NAMES
 
     vcpus, guest_mem_mib = 1, 1024
-    vm = microvm_factory.build(guest_kernel, rootfs_ubuntu_22, monitor_memory=False)
+    vm = microvm_factory.build(guest_kernel, rootfs, monitor_memory=False)
     vm.spawn()
     vm.add_net_iface()
     vm.basic_config(
@@ -800,9 +819,7 @@ def dump_cpuid_to_file(dump_fname, ssh_conn):
 )
 @pytest.mark.timeout(900)
 @pytest.mark.nonci
-def test_cpu_cpuid_snapshot(
-    microvm_factory, guest_kernel, rootfs_ubuntu_22, msr_cpu_template
-):
+def test_cpu_cpuid_snapshot(microvm_factory, guest_kernel, rootfs, msr_cpu_template):
     """
     This is the first part of the test verifying
     that CPUID remains the same after restoring from a snapshot.
@@ -818,7 +835,7 @@ def test_cpu_cpuid_snapshot(
 
     vm = microvm_factory.build(
         kernel=guest_kernel,
-        rootfs=rootfs_ubuntu_22,
+        rootfs=rootfs,
     )
     vm.spawn()
     vm.add_net_iface()
@@ -1194,9 +1211,9 @@ def check_enabled_features(test_microvm, cpu_template):
         "enhanced REP MOVSB/STOSB": "true",
         "SMAP: supervisor mode access prevention": "true",
         # xsave_0xd_0
-        "XCR0 supported: x87 state": "true",
-        "XCR0 supported: SSE state": "true",
-        "XCR0 supported: AVX state": "true",
+        "x87 state": "true",
+        "SSE state": "true",
+        "AVX state": "true",
         # xsave_0xd_1
         "XSAVEOPT instruction": "true",
         # extended_080000001_edx
