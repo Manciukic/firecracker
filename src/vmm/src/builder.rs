@@ -568,7 +568,7 @@ pub fn build_microvm_for_boot(
             .pci_config
             .as_ref()
             .map(|x| x.enabled)
-            .unwrap_or(false),
+            .unwrap_or(true),
     )?;
 
     #[cfg(feature = "gdb")]
