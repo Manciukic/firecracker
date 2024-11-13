@@ -410,6 +410,8 @@ cmd_help() {
     echo "    download_ci_artifacts [--force]"
     echo "        Downloads the CI artifacts used for testing from our S3 bucket. If --force is passed, purges any existing"
     echo "        artifacts first. Useful for refreshing local artifacts after an update, or if something got messed up."
+    echo "    setup_local_ci_artifacts"
+    echo "        Copies and setups the artifacts built using "build_ci_artifacts" to use them with the devtool commands"
     echo ""
 
     cat <<EOF
@@ -1081,6 +1083,14 @@ cmd_build_ci_artifacts() {
     cmd_fix_perms
 }
 
+cmd_setup_local_ci_artifacts() {
+    LOCAL_ARTIFACTS="resources/$(uname -m)"
+    ARTIFACTS=$MICROVM_IMAGES_DIR/$(uname -m)
+    rm -rfv "$ARTIFACTS" 
+    mkdir -pv "$ARTIFACTS"
+    cp -ruvf "$LOCAL_ARTIFACTS/" "$MICROVM_IMAGES_DIR"
+    cmd_sh "./tools/setup-ci-artifacts.sh"
+}
 
 main() {
 
