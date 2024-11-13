@@ -164,8 +164,7 @@ function build_al_kernel {
     fi
     # Concatenate all config files into one. olddefconfig will then resolve
     # as needed. Later values override earlier ones.
-    cat "$@" >.config
-    make olddefconfig
+    scripts/kconfig/merge_config.sh "$@"
     make -j $(nproc) $target
     LATEST_VERSION=$(cat include/config/kernel.release)
     flavour=$(basename $KERNEL_CFG .config |grep -Po "\d+\.\d+\K(-.*)" || true)
@@ -209,7 +208,7 @@ function build_al_kernels {
         die "Too many arguments in '$(basename $0) kernels' command. Please use \`$0 help\` for help."
     else
         KERNEL_VERSION=$1
-        if [[ "$KERNEL_VERSION" != @(5.10|5.10-no-acpi|6.1) ]]; then
+        if [[ "$KERNEL_VERSION" != @(5.10|5.10-no-acpi|5.10-debug|6.1|6.1-debug) ]]; then
             die "Unsupported kernel version: '$KERNEL_VERSION'. Please use \`$0 help\` for help."
         fi
     fi
@@ -217,15 +216,16 @@ function build_al_kernels {
     clone_amazon_linux_repo
 
     CI_CONFIG="$PWD/guest_configs/ci.config"
+    PCIE_CONFIG="$PWD/guest_configs/pcie.config"
 
     if [[ "$KERNEL_VERSION" == @(all|5.10) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config "$CI_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config "$CI_CONFIG" "$PCIE_CONFIG"
     fi
     if [[ $ARCH == "x86_64" && "$KERNEL_VERSION" == @(all|5.10-no-acpi) ]]; then
         build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config "$CI_CONFIG"
     fi
     if [[ "$KERNEL_VERSION" == @(all|6.1) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG" "$PCIE_CONFIG"
     fi
 
     # Build debug kernels
@@ -233,10 +233,14 @@ function build_al_kernels {
     DEBUG_CONFIG="$PWD/guest_configs/debug.config"
     OUTPUT_DIR=$OUTPUT_DIR/debug
     mkdir -pv $OUTPUT_DIR
-    build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config" "$CI_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG"
-    vmlinux_split_debuginfo $OUTPUT_DIR/vmlinux-5.10.*
-    build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config" "$CI_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG"
-    vmlinux_split_debuginfo $OUTPUT_DIR/vmlinux-6.1.*
+    if [[ "$KERNEL_VERSION" == @(all|5.10-debug) ]]; then
+        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config" "$CI_CONFIG" "$PCIE_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG"
+        vmlinux_split_debuginfo $OUTPUT_DIR/vmlinux-5.10.*
+    fi
+    if [[ "$KERNEL_VERSION" == @(all|6.1-debug) ]]; then
+        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config" "$CI_CONFIG" "$PCIE_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG"
+        vmlinux_split_debuginfo $OUTPUT_DIR/vmlinux-6.1.*
+    fi
 }
 
 function print_help {
