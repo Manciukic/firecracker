@@ -568,7 +568,7 @@ pub fn build_microvm_for_boot(
         None,
         vm_resources.machine_config.vcpu_count,
         cpu_template.kvm_capabilities.clone(),
-        vm_resources.pci_config.as_ref().map(|x| x.enabled).unwrap_or(false),
+        vm_resources.pci_config.as_ref().map(|x| x.enabled).unwrap_or(true),
     )?;
 
     #[cfg(feature = "gdb")]
