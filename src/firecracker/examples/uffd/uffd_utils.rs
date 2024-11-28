@@ -109,27 +109,12 @@ impl UffdHandler {
         let fault_page_addr = dst as u64;
 
         // Get the state of the current faulting page.
-        for region in self.mem_regions.iter() {
-            match region.page_states.get(&fault_page_addr) {
-                // Our simple PF handler has a simple strategy:
-                // There exist 4 states in which a memory page can be in:
-                // 1. Uninitialized - page was never touched
-                // 2. FromFile - the page is populated with content from snapshotted memory file
-                // 3. Removed - MADV_DONTNEED was called due to balloon inflation
-                // 4. Anonymous - page was zeroed out -> this implies that more than one page fault
-                //    event was received. This can be a consequence of guest reclaiming back its
-                //    memory from the host (through balloon device)
-                Some(MemPageState::Uninitialized) | Some(MemPageState::FromFile) => {
-                    let (start, end) = self.populate_from_file(region, fault_page_addr, len);
-                    self.update_mem_state_mappings(start, end, MemPageState::FromFile);
-                    return;
-                }
-                Some(MemPageState::Removed) | Some(MemPageState::Anonymous) => {
-                    let (start, end) = self.zero_out(fault_page_addr);
-                    self.update_mem_state_mappings(start, end, MemPageState::Anonymous);
-                    return;
-                }
-                None => {}
+        for r in self.mem_regions.iter() {
+            if (addr as u64) >= (r.mapping.base_host_virt_addr)
+                && (addr as u64) < (r.mapping.base_host_virt_addr + r.mapping.size as u64)
+            {
+                let (_start, _end) = self.populate_from_file(r, fault_page_addr, len);
+                return;
             }
         }
 
