@@ -26,22 +26,15 @@ fn main() {
     let mut runtime = Runtime::new(stream, file);
     runtime.run(|uffd_handler: &mut UffdHandler| {
         // Read an event from the userfaultfd.
-        let event = uffd_handler
-            .read_event()
-            .expect("Failed to read uffd_msg")
-            .expect("uffd_msg not ready");
+        let event = uffd_handler.read_event().expect("Failed to read uffd_msg");
 
-        // We expect to receive either a Page Fault or Removed
-        // event (if the balloon device is enabled).
         match event {
-            userfaultfd::Event::Pagefault { addr, .. } => {
+            Some(userfaultfd::Event::Pagefault { addr, .. }) => {
                 uffd_handler.serve_pf(addr.cast(), uffd_handler.page_size)
             }
-            userfaultfd::Event::Remove { start, end } => uffd_handler.update_mem_state_mappings(
-                start as u64,
-                end as u64,
-                MemPageState::Removed,
-            ),
+            Some(userfaultfd::Event::Remove { start, end }) => uffd_handler
+                .update_mem_state_mappings(start as u64, end as u64, MemPageState::Removed),
+            None => (),
             _ => panic!("Unexpected event on userfaultfd"),
         }
     });
