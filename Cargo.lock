@@ -615,6 +615,7 @@ dependencies = [
  "libc",
  "log-instrument",
  "micro_http",
+ "nix 0.27.1",
  "regex",
  "seccompiler",
  "serde",

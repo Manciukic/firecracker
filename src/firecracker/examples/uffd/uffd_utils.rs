@@ -10,6 +10,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
 use std::ptr;
 
+use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use userfaultfd::{Error, Event, Uffd};
 use vmm_sys_util::sock_ctrl_msg::ScmSocket;
@@ -128,14 +129,14 @@ impl UffdHandler {
         let offset = dst - region.mapping.base_host_virt_addr;
         let src = self.backing_buffer as u64 + region.mapping.offset + offset;
 
-        let ret = unsafe {
-            self.uffd
-                .copy(src as *const _, dst as *mut _, len, true)
-                .expect("Uffd copy failed")
+        let _ret = unsafe {
+            let res = self.uffd.copy(src as *const _, dst as *mut _, len, true);
+            match res {
+                Err(Error::CopyFailed(Errno::EEXIST)) => 0,
+                Err(e) => panic!("Uffd copy failed: {}", e),
+                Ok(ret) => ret,
+            }
         };
-
-        // Make sure the UFFD copied some bytes.
-        assert!(ret > 0);
 
         (dst, dst + len as u64)
     }

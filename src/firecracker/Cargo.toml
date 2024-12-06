@@ -40,6 +40,7 @@ regex = { version = "1.11.1", default-features = false, features = ["std", "unic
 # Dev-Dependencies for uffd examples
 serde = { version = "1.0.215", features = ["derive"] }
 userfaultfd = "0.8.1"
+nix = "0.27.1"
 
 [build-dependencies]
 bincode = "1.2.1"
