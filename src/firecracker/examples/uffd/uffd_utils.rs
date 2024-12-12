@@ -46,7 +46,6 @@ pub enum MemPageState {
 #[derive(Debug, Clone)]
 pub struct MemRegion {
     pub mapping: GuestRegionUffdMapping,
-    page_states: HashMap<u64, MemPageState>,
 }
 
 #[derive(Debug)]
@@ -95,13 +94,7 @@ impl UffdHandler {
     }
 
     pub fn update_mem_state_mappings(&mut self, start: u64, end: u64, state: MemPageState) {
-        for region in self.mem_regions.iter_mut() {
-            for (key, value) in region.page_states.iter_mut() {
-                if key >= &start && key < &end {
-                    *value = state;
-                }
-            }
-        }
+        ()
     }
 
     pub fn serve_pf(&mut self, addr: *mut u8, len: usize) {
@@ -265,16 +258,8 @@ fn create_mem_regions(mappings: &Vec<GuestRegionUffdMapping>, page_size: usize) 
         let mapping = r.clone();
         let mut addr = r.base_host_virt_addr;
         let end_addr = r.base_host_virt_addr + r.size as u64;
-        let mut page_states = HashMap::new();
 
-        while addr < end_addr {
-            page_states.insert(addr, MemPageState::Uninitialized);
-            addr += page_size as u64;
-        }
-        mem_regions.push(MemRegion {
-            mapping,
-            page_states,
-        });
+        mem_regions.push(MemRegion { mapping });
     }
 
     mem_regions
