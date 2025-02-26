@@ -185,7 +185,7 @@ class Microvm:
         fc_binary_path: Path,
         jailer_binary_path: Path,
         netns: net_tools.NetNs,
-        monitor_memory: bool = True,
+        monitor_memory: bool = False,
         jailer_kwargs: Optional[dict] = None,
         numa_node=None,
         custom_cpu_template: Path = None,
