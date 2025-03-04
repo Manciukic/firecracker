@@ -94,19 +94,19 @@ For simplicity, this guide will not use the [`jailer`](../src/jailer/).
 ### Getting a rootfs and Guest Kernel Image
 
 To successfully start a microVM, you will need an uncompressed Linux kernel
-binary, and an ext4 file system image (to use as rootfs). This guide uses a 5.10
+binary, and an ext4 file system image (to use as rootfs). This guide uses a 6.1
 kernel image with a Ubuntu 24.04 rootfs from our CI:
 
 ```bash
 ARCH="$(uname -m)"
 
-latest=$(wget "http://spec.ccfc.min.s3.amazonaws.com/?prefix=firecracker-ci/v1.11/$ARCH/vmlinux-5.10&list-type=2" -O - 2>/dev/null | grep -oP "(?<=<Key>)(firecracker-ci/v1.11/$ARCH/vmlinux-5\.10\.[0-9]{1,3})(?=</Key>)")
+latest=$(wget "http://spec.ccfc.min.s3.amazonaws.com/?prefix=firecracker-ci/v1.12/$ARCH/vmlinux-6.1&list-type=2" -O - 2>/dev/null | grep -oP "(?<=<Key>)(firecracker-ci/v1.12/$ARCH/vmlinux-6\.1\.[0-9]{1,3})(?=</Key>)")
 
 # Download a linux kernel binary
 wget "https://s3.amazonaws.com/spec.ccfc.min/${latest}"
 
 # Download a rootfs
-wget -O ubuntu-24.04.squashfs.upstream "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.11/${ARCH}/ubuntu-24.04.squashfs"
+wget -O ubuntu-24.04.squashfs.upstream "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.12/${ARCH}/ubuntu-24.04.squashfs"
 
 # Create an ssh key for the rootfs
 unsquashfs ubuntu-24.04.squashfs.upstream
