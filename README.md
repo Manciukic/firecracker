@@ -13,6 +13,13 @@ Read more about the Firecracker Charter [here](CHARTER.md).
 
 ### How to passthrough a PCI device
 
+First of all, you need to enable the IOMMU with a kernel command line argument 
+(tested on Intel only):
+```
+$ sudo grubby --update-kernel ALL --args "intel_iommu=on"
+$ sudo reboot
+```
+
 In order to be able to use the device, you first need to attach it to the vfio
 driver:
 
@@ -29,6 +36,7 @@ $ lspci -n -s 0000:18:00.0
 $ echo 0000:18:00.0 > /sys/bus/pci/devices/0000:18:00.0/driver/unbind
 
 # Bind to vfio driver
+# alternatively, you can use a kernel command line argument: vfio-pci.ids=10de:1eb8
 echo 10de 1eb8 > /sys/bus/pci/drivers/vfio-pci/new_id
 ```
 
@@ -49,13 +57,148 @@ json (no HTTP API is supported atm) as follows:
 
 ### How to use a NVIDIA GPU inside the Guest
 
-- build a kernel with loadable module support
-- copy kernel source and headers inside the rootfs
-- install nvidia dkms open source drivers inside the rootfs from
-  https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_network
-- run dkms pointing it to the kernel source code inside the rootfs
-- load the nvidia driver with modprobe
-- test it with cuda samples
+This instructions use Ubuntu 24.04 (Noble):
+
+```
+wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.tar.gz
+tar xvf noble-server-cloudimg-amd64.tar.gz
+truncate -s20G noble-server-cloudimg-amd64.img
+e2fsck -f noble-server-cloudimg-amd64.img
+resize2fs noble-server-cloudimg-amd64.img
+
+mkdir -p mnt
+sudo mount noble-server-cloudimg-amd64.img mnt/
+
+ssh-keygen -f id_rsa -N ""
+sudo cp -v id_rsa.pub mnt/root/.ssh/authorized_keys
+
+sudo chroot mnt/
+# inside the chroot
+passwd -d root
+
+mv /etc/resolv.conf /etc/resolv.conf.bck
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+
+apt update
+DRIVER_BRANCH=570
+SERVER=-server
+LINUX_FLAVOUR=generic
+apt install -y linux-modules-nvidia-${DRIVER_BRANCH}${SERVER}-${LINUX_FLAVOUR}
+apt install -y nvidia-driver-${DRIVER_BRANCH}${SERVER}
+apt install -y nvidia-utils-${DRIVER_BRANCH}${SERVER}
+apt install -y nvidia-cuda-toolkit nvidia-cuda-samples
+
+# I'm using the getting started guide IPs
+cat > /etc/netplan/01-ens2.yaml << EOF
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    ens2:
+      addresses:
+        - 172.16.0.2/24
+      routes:
+        - to: default
+          via: 172.16.0.1
+      nameservers:
+          search: []
+          addresses: [8.8.8.8]
+EOF
+
+mv /etc/resolv.conf.bck /etc/resolv.conf
+exit
+# outside the chroot
+
+sudo umount mnt/
+
+# Setup networking
+TAP_DEV="tap0"
+TAP_IP="172.16.0.1"
+MASK_SHORT="/30"
+
+# Setup network interface
+sudo ip link del "$TAP_DEV" 2> /dev/null || true
+sudo ip tuntap add dev "$TAP_DEV" mode tap
+sudo ip addr add "${TAP_IP}${MASK_SHORT}" dev "$TAP_DEV"
+sudo ip link set dev "$TAP_DEV" up
+
+# Enable ip forwarding
+sudo sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward"
+sudo iptables -P FORWARD ACCEPT
+
+# This tries to determine the name of the host network interface to forward
+# VM's outbound network traffic through. If outbound traffic doesn't work,
+# double check this returns the correct interface!
+HOST_IFACE=$(ip -j route list default |jq -r '.[0].dev')
+
+# Set up microVM internet access
+sudo iptables -t nat -D POSTROUTING -o "$HOST_IFACE" -j MASQUERADE || true
+sudo iptables -t nat -A POSTROUTING -o "$HOST_IFACE" -j MASQUERADE
+
+cat > vm_config.json << EOF
+{
+  "pci": {
+    "enabled": true,
+    "vfio_devices": [
+      { "path": "/sys/bus/pci/devices/0000:18:00.0/" }
+    ]
+  },
+  "boot-source": {
+    "kernel_image_path": "vmlinux",
+    "boot_args": "console=ttyS0 reboot=k panic=1 iommu=off loglevel=8",
+    "initrd_path": null
+  },
+  "drives": [
+    {
+      "drive_id": "rootfs",
+      "partuuid": null,
+      "is_root_device": true,
+      "cache_type": "Unsafe",
+      "is_read_only": false,
+      "path_on_host": "noble-server-cloudimg-amd64.img",
+      "io_engine": "Sync",
+      "rate_limiter": null,
+      "socket": null
+    }
+  ],
+  "machine-config": {
+    "vcpu_count": 2,
+    "mem_size_mib": 4096,
+    "smt": false,
+    "track_dirty_pages": false,
+    "huge_pages": "None"
+  },
+  "cpu-config": null,
+  "balloon": null,
+  "network-interfaces": [
+    {
+        "iface_id": "net1",
+        "guest_mac": "06:00:AC:10:00:02",
+        "host_dev_name": "tap0"
+    }
+  ],
+  "vsock": null,
+  "logger": null,
+  "metrics": null,
+  "mmds-config": null,
+  "entropy": null
+}
+EOF
+
+# prepare the ubuntu kernel
+wget https://raw.githubusercontent.com/torvalds/linux/refs/heads/master/scripts/extract-vmlinux
+sudo bash extract-vmlinux mnt/boot/vmlinuz > vmlinux
+
+sudo firecracker --config-file vm_config.json --no-api --no-seccomp
+
+# login into the VM with username "root"
+# check that nvidia drivers are working
+nvidia-smi
+
+# check that we can run an example from cuda samples
+cd /usr/share/doc/nvidia-cuda-toolkit/examples/Samples/6_Performance/transpose
+make NVCC=$(which nvcc) run
+```
 
 ### What works
 
