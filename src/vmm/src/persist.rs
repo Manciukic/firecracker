@@ -3,6 +3,7 @@
 
 //! Defines state structures for saving/restoring a Firecracker microVM.
 
+use std::ffi::c_void;
 use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -14,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use userfaultfd::{FeatureFlags, Uffd, UffdBuilder};
+use vm_memory::GuestMemoryRegion;
 use vmm_sys_util::sock_ctrl_msg::ScmSocket;
 
 #[cfg(target_arch = "aarch64")]
@@ -29,7 +31,7 @@ use crate::logger::{info, warn};
 use crate::resources::VmResources;
 use crate::seccomp::BpfThreadMap;
 use crate::snapshot::Snapshot;
-use crate::utils::u64_to_usize;
+use crate::utils::{get_page_size, u64_to_usize};
 use crate::vmm_config::boot_source::BootSourceConfig;
 use crate::vmm_config::instance_info::InstanceInfo;
 use crate::vmm_config::machine_config::{HugePageConfig, MachineConfigError, MachineConfigUpdate};
@@ -144,6 +146,9 @@ pub enum CreateSnapshotError {
     SerializeMicrovmState(crate::snapshot::SnapshotError),
     /// Cannot perform {0} on the snapshot backing file: {1}
     SnapshotBackingFile(&'static str, io::Error),
+    /// Error calling mincore
+    Mincore,
+
 }
 
 /// Snapshot version
@@ -188,6 +193,17 @@ fn snapshot_state_to_file(
     snapshot_file
         .sync_all()
         .map_err(|err| SnapshotBackingFile("sync_all", err))
+}
+
+/// TODO
+fn compress_to_bitmap(bits: &[u8]) -> Vec<u64> {
+    let mut bitmap = vec![0u64; bits.len().div_ceil(64)];
+
+    for (i, &bit) in bits.iter().enumerate() {
+        bitmap[i / 64] |= (bit as u64) << (i % 64);
+    }
+
+    bitmap
 }
 
 /// Takes a snapshot of the virtual machine running inside the given [`Vmm`] and saves it to
@@ -240,23 +256,37 @@ fn snapshot_memory_to_file(
     file.set_len(expected_size)
         .map_err(|e| MemoryBackingFile("set_length", e))?;
 
-    match snapshot_type {
+    let write_bitmap = match snapshot_type {
         SnapshotType::Diff => {
-            let dirty_bitmap = vmm.get_dirty_bitmap().map_err(DirtyBitmap)?;
-            vmm.guest_memory()
-                .dump_dirty(&mut file, &dirty_bitmap)
-                .map_err(Memory)
+            vmm.get_dirty_bitmap().map_err(DirtyBitmap)
         }
         SnapshotType::Full => {
-            let dump_res = vmm.guest_memory().dump(&mut file).map_err(Memory);
-            if dump_res.is_ok() {
-                vmm.reset_dirty_bitmap();
-                vmm.guest_memory().reset_dirty();
-            }
+            vmm.reset_dirty_bitmap();
+            vmm.guest_memory().reset_dirty();
 
-            dump_res
+            Ok(vmm.guest_memory()
+                .iter()
+                .enumerate()
+                .map(|(slot, region)| {
+                    let mut mincore_vec = vec![0; region.len().div_ceil(get_page_size().unwrap() as u64) as usize];
+                    unsafe{
+                        match libc::mincore(region.as_ptr().cast::<c_void>(), region.len() as usize, mincore_vec.as_mut_ptr()) {
+                            -1 => return Err(Mincore),
+                            _ => {}
+                        };
+                    }
+                    Ok((slot, compress_to_bitmap(mincore_vec.as_slice())))
+                })
+                .collect::<Result<Vec<_>,_>>()?
+                .into_iter()
+                .collect()
+            )
         }
     }?;
+    vmm.guest_memory()
+        .dump_dirty(&mut file, &write_bitmap)
+        .map_err(Memory)?;
+
     // We need to mark queues as dirty again for all activated devices. The reason we
     // do it here is because we don't mark pages as dirty during runtime
     // for queue objects.
