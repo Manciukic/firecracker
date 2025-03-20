@@ -102,37 +102,47 @@ def run_fio(microvm, mode, block_size):
         return logs_path, cpu_load_future.result()
 
 
-def process_fio_logs(vm, fio_mode, logs_dir, metrics):
+def process_fio_logs(vm, fio_mode, metric, logs_dir, metrics):
     """Parses the fio logs in `{logs_dir}/{fio_mode}_bw.*.log and emits their contents as CloudWatch metrics"""
 
+    unit = {
+        "bw": "Kilobytes/Second",
+        "clat": "Microseconds",
+        "iops": "Count/Second",
+    }.get(metric)
+    assert unit is not None, f"Unknown metric: {metric}"
+
     data = [
-        Path(f"{logs_dir}/{fio_mode}_bw.{job_id + 1}.log")
+        Path(f"{logs_dir}/{fio_mode}_{metric}.{job_id + 1}.log")
         .read_text("UTF-8")
         .splitlines()
         for job_id in range(vm.vcpus_count)
     ]
 
     for tup in zip(*data):
-        bw_read = 0
-        bw_write = 0
+        metric_read = 0
+        metric_write = 0
 
         for line in tup:
             _, value, direction, _ = line.split(",", maxsplit=3)
             value = int(value.strip())
+            # fio emits latency as nsecs but EMF only supports down to micros
+            if metric == "clat":
+                value = value / 1000
 
             # See https://fio.readthedocs.io/en/latest/fio_doc.html#log-file-formats
             match direction.strip():
                 case "0":
-                    bw_read += value
+                    metric_read += value
                 case "1":
-                    bw_write += value
+                    metric_write += value
                 case _:
                     assert False
 
-        if bw_read:
-            metrics.put_metric("bw_read", bw_read, "Kilobytes/Second")
-        if bw_write:
-            metrics.put_metric("bw_write", bw_write, "Kilobytes/Second")
+        if metric_read:
+            metrics.put_metric(f"{metric}_read", metric_read, unit)
+        if metric_write:
+            metrics.put_metric(f"{metric}_write", metric_write, unit)
 
 
 def run_block_performance_test(
@@ -181,7 +191,9 @@ def run_block_performance_test(
 
     logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size)
 
-    process_fio_logs(vm, fio_mode, logs_dir, metrics)
+    process_fio_logs(vm, fio_mode, "bw", logs_dir, metrics)
+    process_fio_logs(vm, fio_mode, "clat", logs_dir, metrics)
+    process_fio_logs(vm, fio_mode, "iops", logs_dir, metrics)
 
     for thread_name, values in cpu_util.items():
         for value in values:
