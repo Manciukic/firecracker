@@ -135,6 +135,59 @@ def process_fio_logs(vm, fio_mode, logs_dir, metrics):
             metrics.put_metric("bw_write", bw_write, "Kilobytes/Second")
 
 
+def run_block_performance_test(
+    test_name,
+    microvm_factory,
+    guest_kernel_acpi,
+    rootfs,
+    vcpus,
+    fio_mode,
+    fio_block_size,
+    io_engine,
+    metrics,
+):
+    """Runs block device tests"""
+
+    vm = microvm_factory.build(guest_kernel_acpi, rootfs, monitor_memory=False)
+    vm.spawn(log_level="Info", emit_metrics=True)
+    vm.basic_config(vcpu_count=vcpus, mem_size_mib=GUEST_MEM_MIB)
+    vm.add_net_iface()
+
+    # Add a secondary block device for benchmark tests.
+    if io_engine != "vhost-user":
+        fs = drive_tools.FilesystemFile(
+            os.path.join(vm.fsfiles, "scratch"), BLOCK_DEVICE_SIZE_MB
+        )
+        vm.add_drive("scratch", fs.path, io_engine=io_engine)
+    else:
+        fs = drive_tools.FilesystemFile(size=BLOCK_DEVICE_SIZE_MB)
+        vm.add_vhost_user_drive("scratch", fs.path)
+
+    vm.start()
+
+    metrics.set_dimensions(
+        {
+            "performance_test": test_name,
+            "io_engine": io_engine,
+            "fio_mode": fio_mode,
+            "fio_block_size": str(fio_block_size),
+            **vm.dimensions,
+        }
+    )
+
+    next_cpu = vm.pin_threads(0)
+    if io_engine == "vhost-user":
+        vm.disks_vhost_user["scratch"].pin(next_cpu)
+
+    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size)
+
+    process_fio_logs(vm, fio_mode, logs_dir, metrics)
+
+    for thread_name, values in cpu_util.items():
+        for value in values:
+            metrics.put_metric(f"cpu_utilization_{thread_name}", value, "Percent")
+
+
 @pytest.mark.timeout(120)
 @pytest.mark.nonci
 @pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
@@ -153,36 +206,18 @@ def test_block_performance(
     """
     Execute block device emulation benchmarking scenarios.
     """
-    vm = microvm_factory.build(guest_kernel_acpi, rootfs, monitor_memory=False)
-    vm.spawn(log_level="Info", emit_metrics=True)
-    vm.basic_config(vcpu_count=vcpus, mem_size_mib=GUEST_MEM_MIB)
-    vm.add_net_iface()
-    # Add a secondary block device for benchmark tests.
-    fs = drive_tools.FilesystemFile(
-        os.path.join(vm.fsfiles, "scratch"), BLOCK_DEVICE_SIZE_MB
+
+    run_block_performance_test(
+        "test_block_performance",
+        microvm_factory,
+        guest_kernel_acpi,
+        rootfs,
+        vcpus,
+        fio_mode,
+        fio_block_size,
+        io_engine,
+        metrics,
     )
-    vm.add_drive("scratch", fs.path, io_engine=io_engine)
-    vm.start()
-
-    metrics.set_dimensions(
-        {
-            "performance_test": "test_block_performance",
-            "io_engine": io_engine,
-            "fio_mode": fio_mode,
-            "fio_block_size": str(fio_block_size),
-            **vm.dimensions,
-        }
-    )
-
-    vm.pin_threads(0)
-
-    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size)
-
-    process_fio_logs(vm, fio_mode, logs_dir, metrics)
-
-    for thread_name, values in cpu_util.items():
-        for value in values:
-            metrics.put_metric(f"cpu_utilization_{thread_name}", value, "Percent")
 
 
 @pytest.mark.nonci
@@ -202,33 +237,14 @@ def test_block_vhost_user_performance(
     Execute block device emulation benchmarking scenarios.
     """
 
-    vm = microvm_factory.build(guest_kernel_acpi, rootfs, monitor_memory=False)
-    vm.spawn(log_level="Info", emit_metrics=True)
-    vm.basic_config(vcpu_count=vcpus, mem_size_mib=GUEST_MEM_MIB)
-    vm.add_net_iface()
-
-    # Add a secondary block device for benchmark tests.
-    fs = drive_tools.FilesystemFile(size=BLOCK_DEVICE_SIZE_MB)
-    vm.add_vhost_user_drive("scratch", fs.path)
-    vm.start()
-
-    metrics.set_dimensions(
-        {
-            "performance_test": "test_block_performance",
-            "io_engine": "vhost-user",
-            "fio_mode": fio_mode,
-            "fio_block_size": str(fio_block_size),
-            **vm.dimensions,
-        }
+    run_block_performance_test(
+        "test_block_vhost_user_performance",
+        microvm_factory,
+        guest_kernel_acpi,
+        rootfs,
+        vcpus,
+        fio_mode,
+        fio_block_size,
+        "vhost-user",
+        metrics,
     )
-
-    next_cpu = vm.pin_threads(0)
-    vm.disks_vhost_user["scratch"].pin(next_cpu)
-
-    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size)
-
-    process_fio_logs(vm, fio_mode, logs_dir, metrics)
-
-    for thread_name, values in cpu_util.items():
-        for value in values:
-            metrics.put_metric(f"cpu_utilization_{thread_name}", value, "Percent")
