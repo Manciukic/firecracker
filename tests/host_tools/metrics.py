@@ -58,6 +58,9 @@ class MetricsWrapperDummy:
     def set_dimensions(self, *args, **kwargs):
         """Set dimensions"""
 
+    def put_dimensions(self, *args, **kwargs):
+        """Set dimensions"""
+
     def put_metric(self, *args, **kwargs):
         """Put a datapoint with given dimensions"""
 

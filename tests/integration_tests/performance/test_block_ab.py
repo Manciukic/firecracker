@@ -44,7 +44,7 @@ def prepare_microvm_for_test(microvm):
     check_output("echo 3 > /proc/sys/vm/drop_caches")
 
 
-def run_fio(microvm, mode, block_size):
+def run_fio(microvm, mode, block_size, ioengine):
     """Run a fio test in the specified mode with block size bs."""
     cmd = (
         CmdBuilder("fio")
@@ -55,7 +55,7 @@ def run_fio(microvm, mode, block_size):
         .with_arg("--time_base=1")
         .with_arg(f"--size={BLOCK_DEVICE_SIZE_MB}M")
         .with_arg("--direct=1")
-        .with_arg("--ioengine=libaio")
+        .with_arg(f"--ioengine={ioengine}")
         .with_arg("--iodepth=32")
         .with_arg(f"--ramp_time={WARMUP_SEC}")
         .with_arg(f"--numjobs={microvm.vcpus_count}")
@@ -68,6 +68,8 @@ def run_fio(microvm, mode, block_size):
         .with_arg("--randrepeat=0")
         .with_arg(f"--runtime={RUNTIME_SEC}")
         .with_arg(f"--write_bw_log={mode}")
+        .with_arg(f"--write_lat_log={mode}")
+        .with_arg(f"--write_iops_log={mode}")
         .with_arg("--log_avg_msec=1000")
         .with_arg("--output-format=json+")
         .build()
@@ -153,6 +155,7 @@ def run_block_performance_test(
     vcpus,
     fio_mode,
     fio_block_size,
+    fio_engine,
     io_engine,
     metrics,
 ):
@@ -175,21 +178,27 @@ def run_block_performance_test(
 
     vm.start()
 
-    metrics.set_dimensions(
-        {
-            "performance_test": test_name,
-            "io_engine": io_engine,
-            "fio_mode": fio_mode,
-            "fio_block_size": str(fio_block_size),
-            **vm.dimensions,
-        }
-    )
+    dimensions = {
+        "performance_test": test_name,
+        "io_engine": io_engine,
+        "fio_mode": fio_mode,
+        "fio_engine": fio_engine,
+        "fio_block_size": str(fio_block_size),
+        **vm.dimensions,
+    }
+    metrics.set_dimensions(dimensions)
+    # also emit with the legacy dimension set to avoid breaking dashboards
+    # can be removed once we have enough data to switch the dashboards to the new metrics
+    if fio_engine == "libaio":
+        legacy_dimensions = {**dimensions}
+        del legacy_dimensions["fio_engine"]
+        metrics.put_dimensions(legacy_dimensions)
 
     next_cpu = vm.pin_threads(0)
     if io_engine == "vhost-user":
         vm.disks_vhost_user["scratch"].pin(next_cpu)
 
-    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size)
+    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size, fio_engine)
 
     process_fio_logs(vm, fio_mode, "bw", logs_dir, metrics)
     process_fio_logs(vm, fio_mode, "clat", logs_dir, metrics)
@@ -205,6 +214,7 @@ def run_block_performance_test(
 @pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
 @pytest.mark.parametrize("fio_mode", ["randread", "randwrite"])
 @pytest.mark.parametrize("fio_block_size", [4096], ids=["bs4096"])
+@pytest.mark.parametrize("fio_engine", ["libaio", "sync"])
 def test_block_performance(
     microvm_factory,
     guest_kernel_acpi,
@@ -212,6 +222,7 @@ def test_block_performance(
     vcpus,
     fio_mode,
     fio_block_size,
+    fio_engine,
     io_engine,
     metrics,
 ):
@@ -219,6 +230,8 @@ def test_block_performance(
     Execute block device emulation benchmarking scenarios.
     """
 
+    if fio_engine == "sync" and vcpus != 1:
+        pytest.skip("Run sync tests only for 1 vcpu to measure FC latency overhead")
     run_block_performance_test(
         "test_block_performance",
         microvm_factory,
@@ -227,6 +240,7 @@ def test_block_performance(
         vcpus,
         fio_mode,
         fio_block_size,
+        fio_engine,
         io_engine,
         metrics,
     )
@@ -236,6 +250,7 @@ def test_block_performance(
 @pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
 @pytest.mark.parametrize("fio_mode", ["randread"])
 @pytest.mark.parametrize("fio_block_size", [4096], ids=["bs4096"])
+@pytest.mark.parametrize("fio_engine", ["libaio", "sync"])
 def test_block_vhost_user_performance(
     microvm_factory,
     guest_kernel_acpi,
@@ -243,12 +258,15 @@ def test_block_vhost_user_performance(
     vcpus,
     fio_mode,
     fio_block_size,
+    fio_engine,
     metrics,
 ):
     """
     Execute block device emulation benchmarking scenarios.
     """
 
+    if fio_engine == "sync" and vcpus != 1:
+        pytest.skip("Run sync tests only for 1 vcpu to measure FC latency overhead")
     run_block_performance_test(
         "test_block_vhost_user_performance",
         microvm_factory,
@@ -257,6 +275,7 @@ def test_block_vhost_user_performance(
         vcpus,
         fio_mode,
         fio_block_size,
+        fio_engine,
         "vhost-user",
         metrics,
     )
