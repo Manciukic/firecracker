@@ -64,7 +64,7 @@ def dict_fmt(dict_tmpl, args):
     return res
 
 
-def group(label, command, instances, platforms, **kwargs):
+def group(label, command, instances, platforms, repeat=1, **kwargs):
     """
     Generate a group step with specified parameters, for each instance+kernel
     combination
@@ -79,16 +79,17 @@ def group(label, command, instances, platforms, **kwargs):
         commands = [command]
     for instance in instances:
         for os_, kv in platforms:
-            # fill any templated variables
-            args = {"instance": instance, "os": os_, "kv": kv}
-            step = {
-                "command": [cmd.format(**args) for cmd in commands],
-                "label": f"{label1} {instance} {os_} {kv}",
-                "agents": args,
-            }
-            step_kwargs = dict_fmt(kwargs, args)
-            step = overlay_dict(step_kwargs, step)
-            steps.append(step)
+            for i in range(repeat):
+                # fill any templated variables
+                args = {"instance": instance, "os": os_, "kv": kv}
+                step = {
+                    "command": [cmd.format(**args) for cmd in commands],
+                    "label": f"{label1} {instance} {os_} {kv} [{i+1}/{repeat}]",
+                    "agents": args,
+                }
+                step_kwargs = dict_fmt(kwargs, args)
+                step = overlay_dict(step_kwargs, step)
+                steps.append(step)
 
     return {"group": label, "steps": steps}
 
