@@ -224,7 +224,7 @@ def run_block_performance_test(
 @pytest.mark.nonci
 @pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
 @pytest.mark.parametrize("fio_mode", ["randread", "randwrite"])
-@pytest.mark.parametrize("fio_block_size", [4096], ids=["bs4096"])
+@pytest.mark.parametrize("fio_block_size", [4096, 65536], ids=["bs4096", "bs65536"])
 @pytest.mark.parametrize("fio_engine", ["libaio", "sync"])
 def test_block_performance(
     microvm_factory,
@@ -241,8 +241,10 @@ def test_block_performance(
     Execute block device emulation benchmarking scenarios.
     """
 
-    if fio_engine == "sync" and vcpus != 1:
-        pytest.skip("Run sync tests only for 1 vcpu to measure FC latency overhead")
+    if fio_engine == "sync" and vcpus != 1 and fio_block_size != 4096:
+        pytest.skip("Run sync tests only for 1 vcpu and 4k blocks to measure FC latency overhead")
+    if fio_block_size == 65536 and vcpus != 2:
+        pytest.skip("Run 64k blocks tests only for 2 vcpus to measure max throughput")
     run_block_performance_test(
         "test_block_performance",
         microvm_factory,
@@ -260,7 +262,7 @@ def test_block_performance(
 @pytest.mark.nonci
 @pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
 @pytest.mark.parametrize("fio_mode", ["randread"])
-@pytest.mark.parametrize("fio_block_size", [4096], ids=["bs4096"])
+@pytest.mark.parametrize("fio_block_size", [4096, 65536], ids=["bs4096", "bs65536"])
 @pytest.mark.parametrize("fio_engine", ["libaio", "sync"])
 def test_block_vhost_user_performance(
     microvm_factory,
@@ -276,8 +278,10 @@ def test_block_vhost_user_performance(
     Execute block device emulation benchmarking scenarios.
     """
 
-    if fio_engine == "sync" and vcpus != 1:
-        pytest.skip("Run sync tests only for 1 vcpu to measure FC latency overhead")
+    if fio_engine == "sync" and vcpus != 1 and fio_block_size != 4096:
+        pytest.skip("Run sync tests only for 1 vcpu and 4k blocks to measure FC latency overhead")
+    if fio_block_size == 65536 and vcpus != 2:
+        pytest.skip("Run 64k blocks tests only for 2 vcpus to measure max throughput")
     run_block_performance_test(
         "test_block_vhost_user_performance",
         microvm_factory,
