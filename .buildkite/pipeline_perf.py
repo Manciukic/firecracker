@@ -89,6 +89,9 @@ pipeline = BKPipeline(
     retry=retry,
 )
 
+# How many times to run each test
+REPEAT = int(os.environ.get("REPEAT", "1"))
+
 tests = [perf_test[test] for test in pipeline.args.test or perf_test.keys()]
 for test in tests:
     devtool_opts = test.pop("devtool_opts")
@@ -109,6 +112,7 @@ for test in tests:
 
     pipeline.build_group(
         command=pipeline.devtool_test(devtool_opts, pytest_opts),
+        repeat=REPEAT,
         # and the rest can be command arguments
         **test,
     )
