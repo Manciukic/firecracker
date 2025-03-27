@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::KVM_IRQCHIP_IOAPIC;
 use kvm_bindings::{
-    KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI, KVM_MEM_LOG_DIRTY_PAGES, KVM_MSI_VALID_DEVID,
-    KvmIrqRouting, kvm_irq_routing_entry, kvm_userspace_memory_region,
+    KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI, KVM_MSI_VALID_DEVID, KvmIrqRouting,
+    kvm_irq_routing_entry,
 };
 use kvm_ioctls::VmFd;
 use log::{debug, error};
@@ -36,7 +36,8 @@ use crate::snapshot::Persist;
 use crate::utils::u64_to_usize;
 use crate::vmm_config::snapshot::SnapshotType;
 use crate::vstate::memory::{
-    Address, GuestMemory, GuestMemoryExtension, GuestMemoryMmap, GuestMemoryRegion, GuestRegionMmap,
+    GuestMemory, GuestMemoryExtension, GuestMemoryMmap, GuestMemoryRegion, GuestRegionMmap,
+    KvmRegion,
 };
 use crate::vstate::resources::ResourceAllocator;
 use crate::vstate::vcpu::VcpuError;
@@ -360,8 +361,7 @@ impl Vm {
         Ok(())
     }
 
-    /// Register a new memory region to this [`Vm`].
-    pub fn register_memory_region(&mut self, region: GuestRegionMmap) -> Result<(), VmError> {
+    fn kvmify_region(&self, region: GuestRegionMmap) -> Result<KvmRegion, VmError> {
         let next_slot = self
             .guest_memory()
             .num_regions()
@@ -371,31 +371,31 @@ impl Vm {
             return Err(VmError::NotEnoughMemorySlots(self.common.max_memslots));
         }
 
-        let flags = if region.bitmap().is_some() {
-            KVM_MEM_LOG_DIRTY_PAGES
-        } else {
-            0
-        };
+        Ok(KvmRegion::from_mmap_region(region, next_slot))
+    }
 
-        let memory_region = kvm_userspace_memory_region {
-            slot: next_slot,
-            guest_phys_addr: region.start_addr().raw_value(),
-            memory_size: region.len(),
-            userspace_addr: region.as_ptr() as u64,
-            flags,
-        };
-
-        let new_guest_memory = self.common.guest_memory.insert_region(Arc::new(region))?;
-
+    fn register_kvm_region(&mut self, region: &KvmRegion) -> Result<(), VmError> {
         // SAFETY: Safe because the fd is a valid KVM file descriptor.
         unsafe {
             self.fd()
-                .set_user_memory_region(memory_region)
+                .set_user_memory_region(*region.inner())
                 .map_err(VmError::SetUserMemoryRegion)?;
         }
 
-        self.common.guest_memory = new_guest_memory;
+        Ok(())
+    }
 
+    /// Register a new memory region to this [`Vm`].
+    pub fn register_memory_region(&mut self, region: GuestRegionMmap) -> Result<(), VmError> {
+        let arcd_region = Arc::new(self.kvmify_region(region)?);
+        let new_guest_memory = self
+            .common
+            .guest_memory
+            .insert_region(Arc::clone(&arcd_region))?;
+
+        self.register_kvm_region(arcd_region.as_ref())?;
+
+        self.common.guest_memory = new_guest_memory;
         Ok(())
     }
 
@@ -419,12 +419,11 @@ impl Vm {
 
     /// Resets the KVM dirty bitmap for each of the guest's memory regions.
     pub fn reset_dirty_bitmap(&self) {
-        self.guest_memory()
-            .iter()
-            .zip(0u32..)
-            .for_each(|(region, slot)| {
-                let _ = self.fd().get_dirty_log(slot, u64_to_usize(region.len()));
-            });
+        self.guest_memory().iter().for_each(|region| {
+            let _ = self
+                .fd()
+                .get_dirty_log(region.inner().slot, u64_to_usize(region.len()));
+        });
     }
 
     /// Retrieves the KVM dirty bitmap for each of the guest's memory regions.
@@ -623,7 +622,7 @@ impl Vm {
 
 /// Use `mincore(2)` to overapproximate the dirty bitmap for the given memslot. To be used
 /// if a diff snapshot is requested, but dirty page tracking wasn't enabled.
-fn mincore_bitmap(region: &GuestRegionMmap) -> Result<Vec<u64>, VmError> {
+fn mincore_bitmap(region: &KvmRegion) -> Result<Vec<u64>, VmError> {
     // TODO: Once Host 5.10 goes out of support, we can make this more robust and work on
     // swap-enabled systems, by doing mlock2(MLOCK_ONFAULT)/munlock() in this function (to
     // force swapped-out pages to get paged in, so that mincore will consider them incore).
@@ -645,7 +644,7 @@ fn mincore_bitmap(region: &GuestRegionMmap) -> Result<Vec<u64>, VmError> {
     // the page cache and resolvable via just a minor page fault).
     let r = unsafe {
         libc::mincore(
-            region.as_ptr().cast::<libc::c_void>(),
+            region.inner().userspace_addr as *mut libc::c_void,
             u64_to_usize(region.len()),
             mincore_bitmap.as_mut_ptr(),
         )
