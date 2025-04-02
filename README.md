@@ -207,8 +207,6 @@ make NVCC=$(which nvcc) run
 
 ### Known issues
 
-- BARs get relocated if the VM memory is less than 4GB due to a (unknown)
-  conflict
 - no support for ARM. It should be pretty easy to add it with a new FDT entry.
 - no support for snapshot/resume (not even for virtio-pci devices).
 - no support for vhost-user-blk.
