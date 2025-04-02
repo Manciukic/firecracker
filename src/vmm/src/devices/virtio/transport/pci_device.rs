@@ -34,6 +34,7 @@ use super::pci_common_config::VirtioPciCommonConfigState;
 use crate::devices::virtio::device::{VirtioDevice, VirtioInterrupt, VirtioInterruptType};
 use crate::devices::virtio::queue::Queue;
 use crate::devices::virtio::transport::VirtioPciCommonConfig;
+use crate::devices::virtio::{TYPE_BLOCK, TYPE_NET};
 use crate::logger::{debug, error};
 use crate::vstate::memory::GuestMemoryMmap;
 
