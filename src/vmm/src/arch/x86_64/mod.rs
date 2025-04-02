@@ -261,6 +261,12 @@ fn configure_pvh(
         type_: E820_RESERVED,
         ..Default::default()
     });
+    memmap.push(hvm_memmap_table_entry {
+        addr: layout::PCI_MMCONFIG_START,
+        size: PCI_MMCONFIG_SIZE,
+        type_: E820_RESERVED,
+        ..Default::default()
+    });
     let last_addr = guest_mem.last_addr();
     if last_addr < end_32bit_gap_start {
         memmap.push(hvm_memmap_table_entry {
