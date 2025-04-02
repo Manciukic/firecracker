@@ -30,12 +30,14 @@ use userfaultfd::Uffd;
 use utils::time::TimestampUs;
 use vfio_ioctls::{VfioContainer, VfioDevice, VfioDeviceFd};
 use vm_device::interrupt::{InterruptManager, MsiIrqGroupConfig};
+use vm_memory::Address;
 #[cfg(target_arch = "aarch64")]
 use vm_superio::Rtc;
 use vm_superio::Serial;
 use vm_system_allocator::{AddressAllocator, GsiApic, SystemAllocator};
 use vmm_sys_util::eventfd::EventFd;
 
+use crate::arch::x86_64::layout::MEM_32BIT_RESERVED_START;
 use crate::arch::ConfigurationError;
 use crate::arch::x86_64::{configure_system_for_boot, load_kernel};
 #[cfg(target_arch = "x86_64")]
@@ -403,6 +405,15 @@ fn create_vmm_and_vcpus(
         const NUM_IOAPIC_PINS: usize = 24;
         const X86_64_IRQ_BASE: u32 = 5;
 
+        const PLATFORM_DEVICE_AREA_SIZE: u64 = 1 << 20;
+        let end_of_mmio_area = GuestAddress(mmio_address_space_size(46));
+        let start_of_device_area = if guest_memory.last_addr() < GuestAddress(MEM_32BIT_RESERVED_START) {
+            GuestAddress(1u64 << 32)
+        } else {
+            guest_memory.last_addr().unchecked_align_up(128 << 20)
+        };
+        let end_of_device_area = end_of_mmio_area.unchecked_sub(PLATFORM_DEVICE_AREA_SIZE);
+
         let allocator = Arc::new(Mutex::new(
             SystemAllocator::new(
                 #[cfg(target_arch = "x86_64")]
@@ -413,10 +424,8 @@ fn create_vmm_and_vcpus(
                 {
                     1 << 16
                 },
-                GuestAddress(0),
-                mmio_address_space_size(46),
-                // GuestAddress(crate::arch::MEM_32BIT_DEVICES_START),
-                // crate::arch::MEM_32BIT_DEVICES_SIZE,
+                end_of_device_area,
+                end_of_mmio_area.unchecked_offset_from(end_of_device_area),
                 #[cfg(target_arch = "x86_64")]
                 vec![GsiApic::new(
                     X86_64_IRQ_BASE,
@@ -450,7 +459,7 @@ fn create_vmm_and_vcpus(
 
         // alignment 4 << 30
         let pci_mmio64_allocator = Arc::new(Mutex::new(
-            AddressAllocator::new(GuestAddress(0), mmio_address_space_size(46)).unwrap(),
+            AddressAllocator::new(start_of_device_area, end_of_device_area.unchecked_offset_from(start_of_device_area)).unwrap(),
         ));
 
         // TODO: allocate GSI for legacy interrupts
