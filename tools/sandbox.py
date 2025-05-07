@@ -18,7 +18,7 @@ from framework.defs import DEFAULT_BINARY_DIR
 from framework.microvm import MicroVMFactory
 
 kernels = list(kernels("vmlinux-*"))
-rootfs = list(disks("ubuntu*ext4"))
+rootfs = list(disks("*ext4"))
 
 
 def parse_byte_size(param):
