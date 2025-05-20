@@ -1,0 +1,1 @@
+KERNEL=="sysgenid", SUBSYSTEM=="misc", MODE="0644", GROUP="root"

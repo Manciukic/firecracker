@@ -1,7 +1,7 @@
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
 RUN dnf swap -y openssl-libs openssl-snapsafe-libs
-RUN dnf install -y systemd openssh-server tmux fio iproute socat vim passwd openssl
+RUN dnf install -y systemd systemd-udev openssh-server tmux fio iproute socat vim passwd openssl
 RUN echo fc-uvm > /etc/hostname
 RUN ssh-keygen -A
 # RUN yes C0maM1erda | passwd root
