@@ -26,6 +26,9 @@
                 "syscall": "read"
             },
             {
+                "syscall": "pread64"
+            },
+            {
                 "syscall": "write"
             },
             {
@@ -480,6 +483,9 @@
             },
             {
                 "syscall": "read"
+            },
+            {
+                "syscall": "pread64"
             },
             {
                 "syscall": "write"
