@@ -108,7 +108,7 @@ pub fn queue_benchmark(c: &mut Criterion) {
 
 criterion_group! {
     name = queue_benches;
-    config = Criterion::default().sample_size(1000).noise_threshold(0.15).confidence_level(0.99);
+    config = Criterion::default().sample_size(1000).noise_threshold(0.15).confidence_level(0.999);
     targets = queue_benchmark
 }
 

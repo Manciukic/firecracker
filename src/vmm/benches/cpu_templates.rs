@@ -44,7 +44,7 @@ pub fn cpu_template_benchmark(c: &mut Criterion) {
 
 criterion_group! {
     name = cpu_template_benches;
-    config = Criterion::default().sample_size(200).noise_threshold(0.05).confidence_level(0.99);
+    config = Criterion::default().sample_size(200).noise_threshold(0.05).confidence_level(0.999);
     targets = cpu_template_benchmark
 }
 
