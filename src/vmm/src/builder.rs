@@ -302,6 +302,7 @@ pub fn build_microvm_for_boot(
     }
 
     boot_cmdline.insert_str("nospectre_bhb").unwrap();
+    boot_cmdline.insert_str("nospectre_v2").unwrap();
 
     configure_system_for_boot(
         &mut vmm,
