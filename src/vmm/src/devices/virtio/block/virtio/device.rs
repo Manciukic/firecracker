@@ -404,7 +404,6 @@ impl VirtioBlock {
                         break;
                     }
 
-                    used_any = true;
                     request.process(&mut self.disk, head.index, mem, &self.metrics)
                 }
                 Err(err) => {
@@ -425,6 +424,7 @@ impl VirtioBlock {
                     break;
                 }
                 ProcessingResult::Executed(finished) => {
+                    used_any = true;
                     queue
                         .add_used(head.index, finished.num_bytes_to_mem)
                         .unwrap_or_else(|err| {
@@ -438,7 +438,7 @@ impl VirtioBlock {
         }
         queue.advance_used_ring_idx();
 
-        if queue.prepare_kick() {
+        if used_any && queue.prepare_kick() {
             self.irq_trigger
                 .trigger_irq(IrqType::Vring)
                 .unwrap_or_else(|_| {
@@ -1574,14 +1574,14 @@ mod tests {
 
             // Run scenario that doesn't trigger FullSq BlockError: Add sq_size flush requests.
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES);
-            simulate_queue_event(&mut block, Some(true));
+            simulate_queue_event(&mut block, Some(false));
             assert!(!block.is_io_engine_throttled);
             simulate_async_completion_event(&mut block, true);
             check_flush_requests_batch(IO_URING_NUM_ENTRIES, &vq);
 
             // Run scenario that triggers FullSqError : Add sq_size + 10 flush requests.
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES + 10);
-            simulate_queue_event(&mut block, Some(true));
+            simulate_queue_event(&mut block, Some(false));
             assert!(block.is_io_engine_throttled);
             // When the async_completion_event is triggered:
             // 1. sq_size requests should be processed processed.
@@ -1608,16 +1608,16 @@ mod tests {
             // Run scenario that triggers FullCqError. Push 2 * IO_URING_NUM_ENTRIES and wait for
             // completion. Then try to push another entry.
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES);
-            simulate_queue_event(&mut block, Some(true));
+            simulate_queue_event(&mut block, Some(false));
             assert!(!block.is_io_engine_throttled);
             thread::sleep(Duration::from_millis(150));
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES);
-            simulate_queue_event(&mut block, Some(true));
+            simulate_queue_event(&mut block, Some(false));
             assert!(!block.is_io_engine_throttled);
             thread::sleep(Duration::from_millis(150));
 
             add_flush_requests_batch(&mut block, &vq, 1);
-            simulate_queue_event(&mut block, Some(true));
+            simulate_queue_event(&mut block, Some(false));
             assert!(block.is_io_engine_throttled);
             simulate_async_completion_event(&mut block, true);
             assert!(!block.is_io_engine_throttled);
@@ -1673,15 +1673,13 @@ mod tests {
             vq.dtable[1].len.set(512);
             mem.write_obj::<u64>(123_456_789, data_addr).unwrap();
 
-            // This will fail because of bandwidth rate limiting.
-            // The irq is still triggered because notification suppression
-            // is not enabled.
+            // Following write procedure should fail because of bandwidth rate limiting.
             {
                 // Trigger the attempt to write.
                 check_metric_after_block!(
                     &block.metrics.rate_limiter_throttled_events,
                     1,
-                    simulate_queue_event(&mut block, Some(true))
+                    simulate_queue_event(&mut block, Some(false))
                 );
 
                 // Assert that limiter is blocked.
@@ -1743,15 +1741,13 @@ mod tests {
             vq.dtable[1].len.set(512);
             mem.write_obj::<u64>(123_456_789, data_addr).unwrap();
 
-            // This will fail because of ops rate limiting.
-            // The irq is still triggered because notification suppression
-            // is not enabled.
+            // Following write procedure should fail because of ops rate limiting.
             {
                 // Trigger the attempt to write.
                 check_metric_after_block!(
                     &block.metrics.rate_limiter_throttled_events,
                     1,
-                    simulate_queue_event(&mut block, Some(true))
+                    simulate_queue_event(&mut block, Some(false))
                 );
 
                 // Assert that limiter is blocked.
@@ -1760,8 +1756,7 @@ mod tests {
                 assert_eq!(vq.used.idx.get(), 0);
             }
 
-            // Do a second write that still fails but this time on the fast path
-            // which does not call `process_queue`, so no irq notifications.
+            // Do a second write that still fails but this time on the fast path.
             {
                 // Trigger the attempt to write.
                 check_metric_after_block!(
