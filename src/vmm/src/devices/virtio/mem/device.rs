@@ -10,6 +10,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::metrics::METRICS;
 use super::{MEM_NUM_QUEUES, MEM_QUEUE};
+use crate::devices::virtio::mem::VIRTIO_MEM_BLOCK_SIZE;
 use crate::devices::DeviceError;
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
 use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
@@ -21,7 +22,6 @@ use crate::logger::{IncMetric, debug, error};
 use crate::vstate::memory::{ByteValued, GuestMemoryMmap};
 
 pub const VIRTIO_MEM_DEV_ID: &str = "mem";
-pub const VIRTIO_MEM_BLOCK_SIZE: usize = 2 << 20; // 2MiB
 
 // Virtio-mem feature bits
 const VIRTIO_MEM_F_UNPLUGGED_INACCESSIBLE: u64 = 1;
