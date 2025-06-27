@@ -259,6 +259,8 @@ pub enum VmmError {
     VmmObserverTeardown(vmm_sys_util::errno::Error),
     /// VMGenID error: {0}
     VMGenID(#[from] VmGenIdError),
+    /// VirtioMem error: {0}
+    VirtioMem(crate::devices::virtio::mem::VirtioMemError),
 }
 
 /// Shorthand type for KVM dirty page bitmap.
