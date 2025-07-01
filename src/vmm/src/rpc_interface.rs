@@ -28,7 +28,7 @@ use crate::vmm_config::drive::{BlockDeviceConfig, BlockDeviceUpdateConfig, Drive
 use crate::vmm_config::entropy::{EntropyDeviceConfig, EntropyDeviceError};
 use crate::vmm_config::instance_info::InstanceInfo;
 use crate::vmm_config::machine_config::{MachineConfig, MachineConfigError, MachineConfigUpdate};
-use crate::vmm_config::memory_hp::{MemoryHpConfig, MemoryHpConfigError, MemoryHpUpdateConfig};
+use crate::vmm_config::memory_hp::{MemoryHpConfig, MemoryHpConfigError, MemoryHpUpdateConfig, MemoryHpStatus};
 use crate::vmm_config::metrics::{MetricsConfig, MetricsConfigError};
 use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::{
@@ -109,6 +109,8 @@ pub enum VmmAction {
     SetMemoryHpDevice(MemoryHpConfig),
     /// Update the memory hotplug device requested size, after microVM start.
     UpdateMemoryHp(MemoryHpUpdateConfig),
+    /// Get the memory hotplug device configuration.
+    GetMemoryHpConfig,
     /// Launch the microVM. This action can only be called before the microVM has booted.
     StartMicroVm,
     /// Send CTRL+ALT+DEL to the microVM, using the i8042 keyboard function. If an AT-keyboard
@@ -199,6 +201,8 @@ pub enum VmmData {
     InstanceInformation(InstanceInfo),
     /// The microVM version.
     VmmVersion(String),
+    /// The memory hotplug device status.
+    MemoryHpStatus(MemoryHpStatus),
 }
 
 /// Trait used for deduplicating the MMDS request handling across the two ApiControllers.
@@ -455,7 +459,8 @@ impl<'a> PrebootApiController<'a> {
             | UpdateBalloonStatistics(_)
             | UpdateBlockDevice(_)
             | UpdateNetworkInterface(_)
-            | UpdateMemoryHp(_) => Err(VmmActionError::OperationNotSupportedPreBoot),
+            | UpdateMemoryHp(_)
+            | GetMemoryHpConfig => Err(VmmActionError::OperationNotSupportedPreBoot),
             #[cfg(target_arch = "x86_64")]
             SendCtrlAltDel => Err(VmmActionError::OperationNotSupportedPreBoot),
         }
@@ -662,6 +667,13 @@ impl RuntimeApiController {
             GetVmmVersion => Ok(VmmData::VmmVersion(
                 self.vmm.lock().expect("Poisoned lock").version(),
             )),
+            GetMemoryHpConfig => self
+                .vmm
+                .lock()
+                .expect("Poisoned lock")
+                .memory_hp_status()
+                .map(VmmData::MemoryHpStatus)
+                .map_err(VmmActionError::InternalVmm),
             PatchMMDS(value) => self.patch_mmds(value),
             Pause => self.pause(),
             PutMMDS(value) => self.put_mmds(value),

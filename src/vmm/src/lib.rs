@@ -145,6 +145,7 @@ use crate::devices::virtio::balloon::{
 use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::mem::device::VIRTIO_MEM_DEV_ID;
 use crate::devices::virtio::mem::VirtioMemError;
+use crate::vmm_config::memory_hp::MemoryHpStatus;
 use crate::devices::virtio::net::Net;
 use crate::devices::virtio::{TYPE_BALLOON, TYPE_BLOCK, TYPE_NET, TYPE_MEM};
 use crate::logger::{METRICS, MetricsError, error, info, warn};
@@ -783,6 +784,39 @@ impl Vmm {
                 .update_requested_size((requested_size_mib * 1024 * 1024) as u64)?;
             
             Ok(())
+        } else {
+            Err(VmmError::DeviceManager(device_manager::mmio::MmioError::DeviceNotFound))
+        }
+    }
+
+    /// Gets the memory hotplug device status.
+    pub fn memory_hp_status(&self) -> Result<MemoryHpStatus, VmmError> {
+        use crate::devices::virtio::mem::VirtioMem;
+        
+        if let Some(busdev) = self.get_bus_device(DeviceType::Virtio(TYPE_MEM), VIRTIO_MEM_DEV_ID) {
+            let virtio_device = busdev
+                .lock()
+                .expect("Poisoned lock")
+                .mmio_transport_ref()
+                .expect("Unexpected device type")
+                .device();
+
+            let device = virtio_device
+                .lock()
+                .expect("Poisoned lock");
+            let mem_device = device
+                .as_any()
+                .downcast_ref::<VirtioMem>()
+                .unwrap();
+            
+            let config = mem_device.config();
+            
+            Ok(MemoryHpStatus {
+                block_size_mib: (config.block_size / (1024 * 1024)) as usize,
+                total_size_mib: (config.region_size / (1024 * 1024)) as usize,
+                plugged_size_mib: (config.plugged_size / (1024 * 1024)) as usize,
+                requested_size_mib: (config.requested_size / (1024 * 1024)) as usize,
+            })
         } else {
             Err(VmmError::DeviceManager(device_manager::mmio::MmioError::DeviceNotFound))
         }
