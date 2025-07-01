@@ -244,7 +244,7 @@ pub fn build_microvm_for_boot(
     )?;
 
     vmm.vm
-        .register_memory_regions(guest_memory)
+        .put_memory_regions(guest_memory, true)
         .map_err(VmmError::Vm)?;
 
     let entry_point = load_kernel(&boot_config.kernel_file, vmm.vm.guest_memory())?;
@@ -324,7 +324,7 @@ pub fn build_microvm_for_boot(
     // TODO: configure KVM slots for HP memory only after system is configured as this
     // addresses shouldn't be exposed to the guest through ACPI, SMBIOS, PVH, etc.
     // In the final implementation the slot would be created on demand.
-    vmm.vm.register_memory_regions(guest_hp_memory).map_err(VmmError::Vm)?;
+    vmm.vm.put_memory_regions(guest_hp_memory, true).map_err(VmmError::Vm)?;
 
     let vmm = Arc::new(Mutex::new(vmm));
 
@@ -457,7 +457,7 @@ pub fn build_microvm_from_snapshot(
     .map_err(StartMicrovmError::Internal)?;
 
     vmm.vm
-        .register_memory_regions(guest_memory)
+        .put_memory_regions(guest_memory, true)
         .map_err(VmmError::Vm)
         .map_err(StartMicrovmError::Internal)?;
     vmm.uffd = uffd;
