@@ -51,7 +51,7 @@ impl VirtioMemConfig {
             region_size: size as u64,
             usable_region_size: size as u64, // All memory is usable since it's pre-allocated
             plugged_size: 0,
-            requested_size: size as u64,
+            requested_size: 0,
         }
     }
 }
@@ -83,6 +83,12 @@ pub enum VirtioMemError {
     UnexpectedReadOnlyDescriptor,
     /// {0}
     InvalidAvailIdx(#[from] InvalidAvailIdx),
+    /// Size {0} is invalid: it must be a multiple of block size and less than the total size
+    InvalidSize(u64),
+    /// Device is not active
+    DeviceNotActive,
+    /// Received error while sending an interrupt: {0}
+    InterruptError(std::io::Error),
 }
 
 #[derive(Debug)]
@@ -362,6 +368,26 @@ impl VirtioMem {
 
     pub(crate) fn activate_event(&self) -> &EventFd {
         &self.activate_event
+    }
+
+    /// Updates the requested size of the virtio-mem device.
+    pub fn update_requested_size(&mut self, requested_size: u64) -> Result<(), VirtioMemError> {
+        if !self.is_activated() {
+            return Err(VirtioMemError::DeviceNotActive);
+        }
+
+        if requested_size % self.config.block_size != 0 {
+            return Err(VirtioMemError::InvalidSize(requested_size));
+        }
+        if requested_size > self.config.region_size {
+            return Err(VirtioMemError::InvalidSize(requested_size));
+        }
+        
+        self.config.requested_size = requested_size;
+        debug!("virtio-mem: Updated requested size to {} bytes", requested_size);
+        self.irq_trigger
+            .trigger_irq(IrqType::Config)
+            .map_err(VirtioMemError::InterruptError)
     }
 }
 
