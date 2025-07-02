@@ -476,13 +476,13 @@ impl VmResources {
         if vhost_user_device_used {
             memory::memfd_backed(
                 regions.as_ref(),
-                self.machine_config.track_dirty_pages,
+                true,
                 self.machine_config.huge_pages,
             )
         } else {
             memory::anonymous(
                 regions.into_iter(),
-                self.machine_config.track_dirty_pages,
+                true,
                 self.machine_config.huge_pages,
             )
         }
