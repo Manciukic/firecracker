@@ -14,6 +14,7 @@ use libc::EFD_NONBLOCK;
 use linux_loader::cmdline::Cmdline as LoaderKernelCmdline;
 use userfaultfd::Uffd;
 use utils::time::TimestampUs;
+use vm_memory::{GuestAddress, GuestMemory};
 #[cfg(target_arch = "aarch64")]
 use vm_superio::Rtc;
 use vm_superio::Serial;
@@ -42,7 +43,7 @@ use crate::devices::legacy::{EventFdTrigger, SerialEventsWrapper, SerialWrapper}
 use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::device::VirtioDevice;
-use crate::devices::virtio::mem::{VirtioMem, VIRTIO_MEM_GUEST_ADDRESS};
+use crate::devices::virtio::mem::VirtioMem;
 use crate::devices::virtio::mmio::MmioTransport;
 use crate::devices::virtio::net::Net;
 use crate::devices::virtio::rng::Entropy;
@@ -192,6 +193,7 @@ fn create_vmm_and_vcpus(
         #[cfg(target_arch = "x86_64")]
         pio_device_manager,
         acpi_device_manager,
+        last_ram_addr: GuestAddress::default(),
     };
 
     Ok((vmm, vcpus))
@@ -227,6 +229,8 @@ pub fn build_microvm_for_boot(
         .allocate_guest_hotpluggable_memory()
         .map_err(StartMicrovmError::GuestMemory)?;
 
+    debug!("Allocated HP memory: {guest_hp_memory:?}");
+
     // Clone the command-line so that a failed boot doesn't pollute the original.
     #[allow(unused_mut)]
     let mut boot_cmdline = boot_config.cmdline.clone();
@@ -245,6 +249,12 @@ pub fn build_microvm_for_boot(
 
     vmm.vm
         .put_memory_regions(guest_memory, true)
+        .map_err(VmmError::Vm)?;
+
+    vmm.last_ram_addr = vmm.vm.guest_memory().last_addr();
+
+    vmm.vm
+        .put_memory_regions(guest_hp_memory, false)
         .map_err(VmmError::Vm)?;
 
     let entry_point = load_kernel(&boot_config.kernel_file, vmm.vm.guest_memory())?;
@@ -321,10 +331,7 @@ pub fn build_microvm_for_boot(
         boot_cmdline,
     )?;
 
-    // TODO: configure KVM slots for HP memory only after system is configured as this
-    // addresses shouldn't be exposed to the guest through ACPI, SMBIOS, PVH, etc.
-    // In the final implementation the slot would be created on demand.
-    vmm.vm.put_memory_regions(guest_hp_memory, true).map_err(VmmError::Vm)?;
+    debug!("Guest memory: {:?}", vmm.vm.guest_memory());
 
     let vmm = Arc::new(Mutex::new(vmm));
 
@@ -737,10 +744,12 @@ fn attach_virtio_mem_device(
     memory_hp_config: &MemoryHpConfig,
 ) -> Result<(), StartMicrovmError> {
     let size = mib_to_bytes(memory_hp_config.total_size_mib);
+    let memory_hp_region = vmm.vm.guest_memory().iter().last().unwrap();
     let virtio_mem = Arc::new(Mutex::new(
-        VirtioMem::new(VIRTIO_MEM_GUEST_ADDRESS, size)
+        VirtioMem::new(memory_hp_region, size)
             .map_err(|e| StartMicrovmError::Internal(VmmError::VirtioMem(e)))?,
     ));
+    debug!("virtio_mem: {:?}", virtio_mem);
 
     let id = virtio_mem.lock().expect("Poisoned lock").id().to_string();
 

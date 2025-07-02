@@ -127,6 +127,7 @@ use devices::acpi::vmgenid::VmGenIdError;
 use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
 use seccomp::BpfProgram;
 use userfaultfd::Uffd;
+use vm_memory::GuestAddress;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::terminal::Terminal;
@@ -326,6 +327,9 @@ pub struct Vmm {
     #[cfg(target_arch = "x86_64")]
     pio_device_manager: PortIODeviceManager,
     acpi_device_manager: ACPIDeviceManager,
+
+    /// The address of the last RAM GuestAddress
+    pub last_ram_addr: GuestAddress,
 }
 
 impl Vmm {
@@ -781,7 +785,7 @@ impl Vmm {
                 .as_mut_any()
                 .downcast_mut::<VirtioMem>()
                 .unwrap()
-                .update_requested_size((requested_size_mib * 1024 * 1024) as u64)?;
+                .update_requested_size((requested_size_mib * 1024 * 1024) as u64, &self.vm)?;
             
             Ok(())
         } else {
