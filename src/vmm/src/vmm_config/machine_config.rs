@@ -155,7 +155,7 @@ impl Default for MachineConfig {
             mem_size_mib: DEFAULT_MEM_SIZE_MIB,
             smt: false,
             cpu_template: None,
-            track_dirty_pages: false,
+            track_dirty_pages: true,
             huge_pages: HugePageConfig::None,
             #[cfg(feature = "gdb")]
             gdb_socket_path: None,
