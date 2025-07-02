@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use vm_device::interrupt::{
     InterruptIndex, InterruptSourceConfig, InterruptSourceGroup, MsiIrqSourceConfig,
 };
-use vm_memory::{GuestAddress, GuestUsize};
+use vm_memory::{GuestAddress, GuestMemory, GuestUsize};
 use vmm_sys_util::errno;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -252,6 +252,8 @@ pub struct VmCommon {
     pub mmio_bus: Arc<vm_device::Bus>,
     /// The memory regions plugged in Kvm
     kvm_memory_slots: Mutex<Vec<kvm_userspace_memory_region>>,
+    /// Last address of RAM
+    last_ram_addr: GuestAddress,
 }
 
 /// Errors associated with the wrappers over KVM ioctls.
@@ -325,6 +327,7 @@ impl Vm {
             resource_allocator: Mutex::new(ResourceAllocator::new()),
             mmio_bus: Arc::new(vm_device::Bus::new()),
             kvm_memory_slots: Mutex::new(Vec::new()),
+            last_ram_addr: GuestAddress(0),
         })
     }
 
@@ -419,6 +422,14 @@ impl Vm {
         kvm_memory_slots.push(memory_region);
 
         Ok(())
+    }
+
+    pub fn set_last_ram_addr(&mut self) {
+        self.common.last_ram_addr = self.guest_memory().last_addr();
+    }
+
+    pub fn last_ram_addr(&self) -> GuestAddress {
+        self.common.last_ram_addr
     }
 
     /// Gets a reference to the kvm file descriptor owned by this VM.
