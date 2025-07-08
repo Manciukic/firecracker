@@ -157,6 +157,22 @@ pub fn build_microvm_for_boot(
     // Clone the command-line so that a failed boot doesn't pollute the original.
     #[allow(unused_mut)]
     let mut boot_cmdline = boot_config.cmdline.clone();
+    // Remove pci=off from boot_cmdline
+    boot_cmdline = linux_loader::cmdline::Cmdline::try_from(
+        boot_cmdline
+            .as_cstring()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+            .split_whitespace()
+            .filter(|s| *s != "pci=off")
+            .chain(std::iter::once("net.ifnames=0"))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim(),
+            crate::arch::CMDLINE_MAX_SIZE
+        ).unwrap();
 
     let cpu_template = vm_resources
         .machine_config
@@ -258,8 +274,6 @@ pub fn build_microvm_for_boot(
     } else {
         log::warn!("Vcpus do not support pvtime, steal time will not be reported to guest");
     }
-
-    boot_cmdline.insert_str("net.ifnames=0").unwrap();
 
     configure_system_for_boot(
         &kvm,
