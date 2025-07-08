@@ -259,6 +259,8 @@ pub fn build_microvm_for_boot(
         log::warn!("Vcpus do not support pvtime, steal time will not be reported to guest");
     }
 
+    boot_cmdline.insert_str("net.ifnames=0").unwrap();
+
     configure_system_for_boot(
         &kvm,
         &vm,
