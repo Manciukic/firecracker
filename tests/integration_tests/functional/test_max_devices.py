@@ -30,9 +30,9 @@ def test_attach_maximum_devices(microvm_factory, guest_kernel, rootfs, pci_enabl
     Test attaching maximum number of devices to the microVM.
     """
     test_microvm = microvm_factory.build(
-        kernel=guest_kernel, rootfs=rootfs, monitor_memory=False
+        kernel=guest_kernel, rootfs=rootfs, pci=pci_enabled, monitor_memory=False
     )
-    test_microvm.spawn(pci=pci_enabled)
+    test_microvm.spawn()
 
     # Set up a basic microVM.
     test_microvm.basic_config(mem_size_mib=1024)
@@ -59,9 +59,9 @@ def test_attach_too_many_devices(microvm_factory, guest_kernel, rootfs, pci_enab
     Test attaching to a microVM more devices than available IRQs.
     """
     test_microvm = microvm_factory.build(
-        kernel=guest_kernel, rootfs=rootfs, monitor_memory=False
+        kernel=guest_kernel, rootfs=rootfs, pci=pci_enabled, monitor_memory=False
     )
-    test_microvm.spawn(pci=pci_enabled)
+    test_microvm.spawn()
 
     # Set up a basic microVM.
     test_microvm.basic_config(mem_size_mib=1024)
