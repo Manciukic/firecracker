@@ -374,7 +374,7 @@ fn main_exec() -> Result<(), MainError> {
         .map(|x| x.expect("Unable to open or read from the mmds content file"));
 
     let boot_timer_enabled = arguments.flag_present("boot-timer");
-    let pci_enabled = arguments.flag_present("enable-pci");
+    let pci_enabled = false;
     let api_enabled = !arguments.flag_present("no-api");
     let api_payload_limit = arg_parser
         .arguments()
