@@ -6,8 +6,10 @@ import fcntl
 import os
 import platform
 import signal
+import subprocess
 import termios
 import time
+from pathlib import Path
 
 from framework import utils
 from framework.microvm import Serial
@@ -118,7 +120,9 @@ def get_total_mem_size(pid):
     _, stdout, stderr = utils.check_output(cmd)
     assert stderr == ""
 
-    return stdout
+    _, raw_output, _ = utils.check_output(f"pmap {pid}")
+
+    return stdout, raw_output
 
 
 def send_bytes(tty, bytes_count, timeout=60):
@@ -137,6 +141,20 @@ def test_serial_dos(uvm_plain_any):
     """
     microvm = uvm_plain_any
     microvm.help.enable_console()
+    # strace_output_path = Path(microvm.path, "strace.out")
+    # strace_cmd = [
+    #     "strace",
+    #     "-tt",
+    #     "--syscall-times=ns",
+    #     "-y",
+    #     "-k",
+    #     "-e",
+    #     "mmap,munmap",
+    #     "-o",
+    #     str(strace_output_path),
+    # ]
+    # microvm.add_pre_cmd(strace_cmd)
+
     microvm.spawn()
 
     # Set up the microVM with 1 vCPU and a serial console.
@@ -145,20 +163,43 @@ def test_serial_dos(uvm_plain_any):
         boot_args="console=ttyS0 reboot=k panic=1",
     )
     microvm.add_net_iface()
-    microvm.start()
 
     # Open an fd for firecracker process terminal.
     tty_path = f"/proc/{microvm.firecracker_pid}/fd/0"
     tty_fd = os.open(tty_path, os.O_RDWR)
 
+    gdb_cmd = [
+        "gdb",
+        "--command=/firecracker/tests/data/gdb.cmd",
+        "-p",
+        str(microvm.firecracker_pid),
+        # str(Path(microvm.path, "root", "firecracker")),
+    ]
+    gdb = subprocess.Popen(gdb_cmd, stdout=open("gdb.stdout", "w"), stderr=open("gdb.stderr", "w"))
+    time.sleep(1)
+    microvm.start()
+
+    # Warm up the serial connection
+    # send_bytes(tty_fd, 100, timeout=1)
+
     # Check if the total memory size changed.
-    before_size = get_total_mem_size(microvm.firecracker_pid)
+    before_size, before_raw = get_total_mem_size(microvm.firecracker_pid)
     send_bytes(tty_fd, 100000000, timeout=1)
-    after_size = get_total_mem_size(microvm.firecracker_pid)
+    after_size, after_raw = get_total_mem_size(microvm.firecracker_pid)
     assert before_size == after_size, (
         "The memory size of the "
         "Firecracker process "
-        "changed from {} to {}.".format(before_size, after_size)
+        "changed from {} to {}.\n\n"
+        "{}\n\n"
+        "{}\n\n"
+        # "{}\n\n"
+        .format(
+            before_size,
+            after_size,
+            before_raw,
+            after_raw,
+            # strace_output_path.read_text(),
+        )
     )
 
 

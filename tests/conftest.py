@@ -540,7 +540,7 @@ def uvm_plain_any(microvm_factory, guest_kernel, rootfs, pci_enabled):
     kernel: all
     rootfs: Ubuntu 24.04
     """
-    return microvm_factory.build(guest_kernel, rootfs, pci=pci_enabled)
+    return microvm_factory.build(guest_kernel, rootfs, pci=pci_enabled, monitor_memory=False)
 
 
 guest_kernel_6_1_debug = pytest.fixture(

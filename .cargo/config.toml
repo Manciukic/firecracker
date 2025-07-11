@@ -2,6 +2,8 @@
 target-dir = "build/cargo_target"
 rustflags = [
   "-Ccodegen-units=1",
+  "-Cforce-frame-pointers=yes",
+  "-Copt-level=0",
 ]
 
 [net]
