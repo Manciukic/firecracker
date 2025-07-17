@@ -1,0 +1,51 @@
+name: Check libseccomp Updates
+
+on:
+  schedule:
+    # Run weekly (adjust as needed)
+    - cron: '0 0 * * 1'  # Runs at 00:00 on Monday
+  workflow_dispatch:  # Allows manual triggering
+
+permissions:
+  issues: write  # Permission to create issues
+
+jobs:
+  check-libseccomp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Get current libseccomp version
+        id: current-version
+        run: |
+          CURRENT_VERSION=$(grep LIBSECCOMP_VER tools/devctr/Dockerfile | grep -o "v[0-9.]*")
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT_VERSION"
+
+      - name: Check latest libseccomp release
+        id: latest-version
+        run: |
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/seccomp/libseccomp/releases/latest | jq -r .tag_name)
+          echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "Latest version: $LATEST_VERSION"
+
+      - name: Create issue content file
+        if: steps.current-version.outputs.current_version != steps.latest-version.outputs.latest_version
+        run: |
+          cat > issue_content.md << EOF
+          A new version of libseccomp is available.
+          
+          Current version: ${{ steps.current-version.outputs.current_version }}
+          Latest version: ${{ steps.latest-version.outputs.latest_version }}
+          
+          Please update the version in "tools/devctr/Dockerfile".
+          EOF
+
+      - name: Create issue if update available
+        if: steps.current-version.outputs.current_version != steps.latest-version.outputs.latest_version
+        uses: peter-evans/create-issue-from-file@v4
+        with:
+          title: "Update libseccomp to ${{ steps.latest-version.outputs.latest_version }}"
+          content-filepath: issue_content.md
+          labels: dependency-update, libseccomp
