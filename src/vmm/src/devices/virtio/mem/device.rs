@@ -467,24 +467,7 @@ impl VirtioMem {
         size: GuestUsize,
         plug: bool,
     ) -> Result<u64, VirtioMemError> {
-        debug!(
-            "{} kvm slots at {start_addr:?} of size {size}",
-            if plug { "Plugging" } else { "Unplugging" }
-        );
-        let mem = self.vm.guest_memory();
-        let mut addr = start_addr;
-        let end_addr = start_addr.checked_add(size).unwrap();
-
-        while addr < end_addr {
-            let region = mem.find_region(addr).unwrap();
-            if self.vm.is_region_plugged(region) != plug {
-                self.vm
-                    .set_user_memory_region(region, plug)
-                    .map_err(VirtioMemError::RegisterMemoryRegion)?;
-            }
-            addr = addr.checked_add(region.len()).unwrap();
-        }
-        Ok(addr.checked_offset_from(start_addr).unwrap())
+        Ok(size)
     }
 
     fn plug_range(

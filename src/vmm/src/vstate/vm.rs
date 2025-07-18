@@ -387,7 +387,7 @@ impl Vm {
     pub fn put_memory_region(
         &mut self,
         region: GuestRegionMmap,
-        register: bool,
+        _register: bool,
     ) -> Result<(), VmError> {
         let next_slot = self
             .guest_memory()
@@ -402,9 +402,7 @@ impl Vm {
             .start_addr_to_slot
             .insert(region.start_addr().0, next_slot);
 
-        if register {
-            self.set_user_memory_region(&region, true)?;
-        }
+        self.set_user_memory_region(&region, true)?;
         let new_guest_memory = self.common.guest_memory.insert_region(Arc::new(region))?;
         self.common.guest_memory = new_guest_memory;
         Ok(())
