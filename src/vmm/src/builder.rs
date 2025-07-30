@@ -167,7 +167,7 @@ pub fn build_microvm_for_boot(
             .to_string()
             .split_whitespace()
             .filter(|s| *s != "pci=off")
-            .chain(std::iter::once("net.ifnames=0"))
+            .chain(["net.ifnames=0", "swiotlb=noforce"])
             .collect::<Vec<_>>()
             .join(" ")
             .trim(),
