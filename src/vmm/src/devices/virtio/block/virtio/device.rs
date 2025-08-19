@@ -484,7 +484,7 @@ impl VirtioBlock {
                     let res = cqe.result();
                     let user_data = cqe.user_data();
 
-                    let (pending, res) = match res {
+                    let (user_data, res) = match res {
                         Ok(count) => (user_data, Ok(count)),
                         Err(error) => (
                             user_data,
@@ -493,7 +493,24 @@ impl VirtioBlock {
                             ))),
                         ),
                     };
+                    let pending = engine.pending_requests.get_mut(&user_data);
+                    if pending.is_none() {
+                        warn!(
+                            "No pending request found for user_data: {:?}. This may happen if \
+                             part of the request already failed",
+                            user_data
+                        );
+                        continue;
+                    }
+                    let pending = pending.unwrap();
+                    pending.completed += u32::try_from(user_data.len).unwrap();
+                    if res.is_ok() && pending.completed < pending.data_len {
+                        engine.pending_requests.remove(&user_data);
+                        continue;
+                    }
+                    let res = if res.is_ok() { Ok(user_data.len.try_into().unwrap()) } else { res };
                     let finished = pending.finish(&active_state.mem, res, &self.metrics);
+                    engine.pending_requests.remove(&user_data);
                     queue
                         .add_used(finished.desc_idx, finished.num_bytes_to_mem)
                         .unwrap_or_else(|err| {

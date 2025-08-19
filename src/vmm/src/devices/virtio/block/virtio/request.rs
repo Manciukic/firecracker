@@ -6,6 +6,7 @@
 // found in the THIRD-PARTY file.
 
 use std::convert::From;
+use std::sync::atomic::AtomicU32;
 
 use vm_memory::GuestMemoryError;
 
@@ -89,12 +90,13 @@ impl Status {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct PendingRequest {
-    r#type: RequestType,
-    data_len: u32,
-    status_addr: GuestAddress,
-    desc_idx: u16,
+    pub(crate) r#type: RequestType,
+    pub(crate) data_len: u32,
+    pub(crate) status_addr: GuestAddress,
+    pub(crate) desc_idx: u16,
+    pub(crate) completed: u32,
 }
 
 impl PendingRequest {
@@ -360,6 +362,7 @@ impl Request {
             data_len: self.data_len,
             status_addr: self.status_addr,
             desc_idx,
+            completed: 0,
         }
     }
 
@@ -433,6 +436,7 @@ mod tests {
                 data_len: 0,
                 status_addr: Default::default(),
                 desc_idx: 0,
+                completed: 0,
             }
         }
     }

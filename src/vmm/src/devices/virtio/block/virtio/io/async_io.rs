@@ -1,12 +1,13 @@
 // Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::os::fd::RawFd;
 use std::os::unix::io::AsRawFd;
 
-use vm_memory::GuestMemoryError;
+use vm_memory::{GuestMemoryError, GuestMemoryRegion};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::devices::virtio::block::virtio::io::RequestError;
@@ -38,32 +39,43 @@ pub struct AsyncFileEngine {
     file: File,
     ring: IoUring<WrappedRequest>,
     completion_evt: EventFd,
+    pub(crate) pending_requests: HashMap<UserData, PendingRequest>,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+pub struct UserData {
+    pub(crate) desc_idx: u16,
+    pub(crate) offset: usize,
+    pub(crate) len: usize,
 }
 
 #[derive(Debug)]
 pub struct WrappedRequest {
     addr: Option<GuestAddress>,
-    req: PendingRequest,
+    user_data: UserData,
 }
 
 impl WrappedRequest {
-    fn new(req: PendingRequest) -> Self {
-        WrappedRequest { addr: None, req }
-    }
-
-    fn new_with_dirty_tracking(addr: GuestAddress, req: PendingRequest) -> Self {
+    fn new(user_data: UserData) -> Self {
         WrappedRequest {
-            addr: Some(addr),
-            req,
+            addr: None,
+            user_data,
         }
     }
 
-    fn mark_dirty_mem_and_unwrap(self, mem: &GuestMemoryMmap, count: u32) -> PendingRequest {
+    fn new_with_dirty_tracking(addr: GuestAddress, user_data: UserData) -> Self {
+        WrappedRequest {
+            addr: Some(addr),
+            user_data,
+        }
+    }
+
+    fn mark_dirty_mem_and_unwrap(self, mem: &GuestMemoryMmap, count: u32) -> UserData {
         if let Some(addr) = self.addr {
             mem.mark_dirty(addr, count as usize)
         }
 
-        self.req
+        self.user_data
     }
 }
 
@@ -98,6 +110,7 @@ impl AsyncFileEngine {
             file,
             ring,
             completion_evt,
+            pending_requests: HashMap::new(),
         })
     }
 
@@ -127,30 +140,50 @@ impl AsyncFileEngine {
         count: u32,
         req: PendingRequest,
     ) -> Result<(), RequestError<AsyncIoError>> {
-        let buf = match mem.get_slice(addr, count as usize) {
-            Ok(slice) => slice.ptr_guard_mut().as_ptr(),
-            Err(err) => {
-                return Err(RequestError {
-                    req,
-                    error: AsyncIoError::GuestMemory(err),
-                });
-            }
-        };
+        let mut operations = vec![];
+        let count = count as usize;
 
-        let wrapped_user_data = WrappedRequest::new_with_dirty_tracking(addr, req);
-
-        self.ring
-            .push(Operation::read(
+        mem.try_access(count, addr, |total, len, caddr, region| {
+            let user_data = UserData {
+                desc_idx: req.desc_idx,
+                offset: total,
+                len,
+            };
+            self.pending_requests.insert(user_data, req);
+            let wrapped_user_data = WrappedRequest::new_with_dirty_tracking(addr, user_data);
+            operations.push(Operation::read(
                 0,
-                buf as usize,
-                count,
-                offset,
+                region.get_host_address(caddr)? as usize,
+                len.try_into().unwrap(),
+                offset + (total as u64),
                 wrapped_user_data,
-            ))
-            .map_err(|(io_uring_error, data)| RequestError {
-                req: data.req,
-                error: AsyncIoError::IoUring(io_uring_error),
-            })
+            ));
+            Ok(len)
+        })
+        .and_then(|x| {
+            if x == count {
+                Ok(())
+            } else {
+                Err(GuestMemoryError::PartialBuffer {
+                    expected: count,
+                    completed: x,
+                })
+            }
+        })
+        .map_err(|err| RequestError {
+            req,
+            error: AsyncIoError::GuestMemory(err),
+        })?;
+
+        for op in operations {
+            self.ring
+                .push(op)
+                .map_err(|(io_uring_error, data)| RequestError {
+                    req,
+                    error: AsyncIoError::IoUring(io_uring_error),
+                })?;
+        }
+        Ok(())
     }
 
     pub fn push_write(
@@ -161,39 +194,65 @@ impl AsyncFileEngine {
         count: u32,
         req: PendingRequest,
     ) -> Result<(), RequestError<AsyncIoError>> {
-        let buf = match mem.get_slice(addr, count as usize) {
-            Ok(slice) => slice.ptr_guard_mut().as_ptr(),
-            Err(err) => {
-                return Err(RequestError {
-                    req,
-                    error: AsyncIoError::GuestMemory(err),
-                });
-            }
-        };
+        let mut operations = vec![];
+        let count = count as usize;
 
-        let wrapped_user_data = WrappedRequest::new(req);
-
-        self.ring
-            .push(Operation::write(
+        mem.try_access(count, addr, |total, len, caddr, region| {
+            let user_data = UserData {
+                desc_idx: req.desc_idx,
+                offset: total,
+                len,
+            };
+            self.pending_requests.insert(user_data, req);
+            let wrapped_user_data = WrappedRequest::new_with_dirty_tracking(addr, user_data);
+            operations.push(Operation::write(
                 0,
-                buf as usize,
-                count,
-                offset,
+                region.get_host_address(caddr)? as usize,
+                len.try_into().unwrap(),
+                offset + (total as u64),
                 wrapped_user_data,
-            ))
-            .map_err(|(io_uring_error, data)| RequestError {
-                req: data.req,
-                error: AsyncIoError::IoUring(io_uring_error),
-            })
+            ));
+            Ok(len)
+        })
+        .and_then(|x| {
+            if x == count {
+                Ok(())
+            } else {
+                Err(GuestMemoryError::PartialBuffer {
+                    expected: count,
+                    completed: x,
+                })
+            }
+        })
+        .map_err(|err| RequestError {
+            req,
+            error: AsyncIoError::GuestMemory(err),
+        })?;
+
+        for op in operations {
+            self.ring
+                .push(op)
+                .map_err(|(io_uring_error, data)| RequestError {
+                    req,
+                    error: AsyncIoError::IoUring(io_uring_error),
+                })?;
+        }
+        Ok(())
     }
 
     pub fn push_flush(&mut self, req: PendingRequest) -> Result<(), RequestError<AsyncIoError>> {
-        let wrapped_user_data = WrappedRequest::new(req);
+        let user_data = UserData {
+            desc_idx: req.desc_idx,
+            offset: 0,
+            len: 0,
+        };
+        self.pending_requests.insert(user_data, req);
+        let wrapped_user_data = WrappedRequest::new(user_data);
 
         self.ring
             .push(Operation::fsync(0, wrapped_user_data))
             .map_err(|(io_uring_error, data)| RequestError {
-                req: data.req,
+                req,
                 error: AsyncIoError::IoUring(io_uring_error),
             })
     }
@@ -234,10 +293,7 @@ impl AsyncFileEngine {
         self.ring.pop().map_err(AsyncIoError::IoUring)
     }
 
-    pub fn pop(
-        &mut self,
-        mem: &GuestMemoryMmap,
-    ) -> Result<Option<Cqe<PendingRequest>>, AsyncIoError> {
+    pub fn pop(&mut self, mem: &GuestMemoryMmap) -> Result<Option<Cqe<UserData>>, AsyncIoError> {
         let cqe = self.do_pop()?.map(|cqe| {
             let count = cqe.count();
             cqe.map_user_data(|wrapped_user_data| {
