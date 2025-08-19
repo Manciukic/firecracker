@@ -4,7 +4,7 @@
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
 
-use vm_memory::{GuestAddress, GuestMemory, ReadVolatile, VolatileMemoryError};
+use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 use crate::arch::initrd_load_addr;
 use crate::utils::u64_to_usize;
@@ -16,14 +16,12 @@ use crate::vstate::memory::GuestMemoryMmap;
 pub enum InitrdError {
     /// Failed to compute the initrd address.
     Address,
-    /// Cannot load initrd due to an invalid memory configuration.
-    Load,
     /// Cannot image metadata: {0}
     Metadata(std::io::Error),
     /// Cannot copy initrd file fd: {0}
     CloneFd(std::io::Error),
     /// Cannot load initrd due to an invalid image: {0}
-    Read(VolatileMemoryError),
+    Read(#[from] GuestMemoryError),
 }
 
 /// Type for passing information about the initrd in the guest memory.
@@ -57,11 +55,7 @@ impl InitrdConfig {
         let Some(address) = initrd_load_addr(vm_memory, size) else {
             return Err(InitrdError::Address);
         };
-        let mut slice = vm_memory
-            .get_slice(GuestAddress(address), size)
-            .map_err(|_| InitrdError::Load)?;
-        file.read_exact_volatile(&mut slice)
-            .map_err(InitrdError::Read)?;
+        vm_memory.read_exact_volatile_from(GuestAddress(address), &mut file, size)?;
 
         Ok(InitrdConfig {
             address: GuestAddress(address),
