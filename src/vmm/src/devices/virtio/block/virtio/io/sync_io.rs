@@ -53,8 +53,7 @@ impl SyncFileEngine {
         self.file
             .seek(SeekFrom::Start(offset))
             .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|mut slice| Ok(self.file.read_exact_volatile(&mut slice)?))
+        mem.read_exact_volatile_from(addr, &mut self.file, count as usize)
             .map_err(SyncIoError::Transfer)?;
         Ok(count)
     }
@@ -69,8 +68,7 @@ impl SyncFileEngine {
         self.file
             .seek(SeekFrom::Start(offset))
             .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|slice| Ok(self.file.write_all_volatile(&slice)?))
+        mem.write_all_volatile_to(addr, &mut self.file, count as usize)
             .map_err(SyncIoError::Transfer)?;
         Ok(count)
     }
