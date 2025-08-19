@@ -7,7 +7,8 @@ use libc::{c_void, iovec, size_t};
 use serde::{Deserialize, Serialize};
 use vm_memory::bitmap::Bitmap;
 use vm_memory::{
-    GuestMemory, GuestMemoryError, ReadVolatile, VolatileMemoryError, VolatileSlice, WriteVolatile,
+    Address, GuestMemory, GuestMemoryError, GuestMemoryRegion, ReadVolatile, VolatileMemoryError,
+    VolatileSlice, WriteVolatile,
 };
 
 use super::iov_deque::{IovDeque, IovDequeError};
@@ -67,18 +68,30 @@ impl IoVecBuffer {
                 return Err(IoVecError::WriteOnlyDescriptor);
             }
 
-            // We use get_slice instead of `get_host_address` here in order to have the whole
-            // range of the descriptor chain checked, i.e. [addr, addr + len) is a valid memory
-            // region in the GuestMemoryMmap.
-            let iov_base = mem
-                .get_slice(desc.addr, desc.len as usize)?
-                .ptr_guard_mut()
-                .as_ptr()
-                .cast::<c_void>();
-            self.vecs.push(iovec {
-                iov_base,
-                iov_len: desc.len as size_t,
-            });
+            // We use try_access instead of `get_slice` or `get_host_address` here in case the guest
+            // memory is not contiguous in host memory due to multiple consecutive KVM slots
+            let desc_len = desc.len as usize;
+            mem.try_access(
+                desc_len,
+                desc.addr,
+                |offset, len, caddr, region| -> Result<usize, GuestMemoryError> {
+                    self.vecs.push(iovec {
+                        iov_base: region.get_host_address(caddr)?.cast::<c_void>(),
+                        iov_len: len,
+                    });
+                    Ok(len)
+                },
+            )
+            .and_then(|x| {
+                if x == desc_len {
+                    Ok(())
+                } else {
+                    Err(GuestMemoryError::PartialBuffer {
+                        expected: desc_len,
+                        completed: x,
+                    })
+                }
+            })?;
             self.len = self
                 .len
                 .checked_add(desc.len)
@@ -264,31 +277,51 @@ impl<const L: u16> IoVecBufferMut<L> {
                 return Err(IoVecError::ReadOnlyDescriptor);
             }
 
-            // We use get_slice instead of `get_host_address` here in order to have the whole
-            // range of the descriptor chain checked, i.e. [addr, addr + len) is a valid memory
-            // region in the GuestMemoryMmap.
-            let slice = mem
-                .get_slice(desc.addr, desc.len as usize)
-                .inspect_err(|_| {
-                    self.vecs.pop_back(nr_iovecs);
-                })?;
-            // We need to mark the area of guest memory that will be mutated through this
-            // IoVecBufferMut as dirty ahead of time, as we loose access to all
-            // vm-memory related information after converting down to iovecs.
-            slice.bitmap().mark_dirty(0, desc.len as usize);
-            let iov_base = slice.ptr_guard_mut().as_ptr().cast::<c_void>();
+            // We use try_access instead of `get_slice` or `get_host_address` here in case the guest
+            // memory is not contiguous in host memory due to multiple consecutive KVM slots
+            let desc_len = desc.len as usize;
+            let mut new_vecs = vec![];
+            mem.try_access(
+                desc_len,
+                desc.addr,
+                |offset, len, caddr, region| -> Result<usize, GuestMemoryError> {
+                    region
+                        .bitmap()
+                        .mark_dirty(caddr.raw_value().try_into().unwrap(), len);
 
-            if self.vecs.is_full() {
+                    new_vecs.push(iovec {
+                        iov_base: region.get_host_address(caddr)?.cast(),
+                        iov_len: desc.len as size_t,
+                    });
+
+                    Ok(len)
+                },
+            )
+            .and_then(|x| {
+                if x == desc_len {
+                    Ok(())
+                } else {
+                    Err(GuestMemoryError::PartialBuffer {
+                        expected: desc_len,
+                        completed: x,
+                    })
+                }
+            })
+            .inspect_err(|_| {
                 self.vecs.pop_back(nr_iovecs);
-                return Err(IoVecError::IovDequeOverflow);
+            })?;
+
+            for iovec in new_vecs {
+                if self.vecs.is_full() {
+                    self.vecs.pop_back(nr_iovecs);
+                    return Err(IoVecError::IovDequeOverflow);
+                }
+
+                self.vecs.push_back(iovec);
+
+                nr_iovecs += 1;
             }
 
-            self.vecs.push_back(iovec {
-                iov_base,
-                iov_len: desc.len as size_t,
-            });
-
-            nr_iovecs += 1;
             length = length
                 .checked_add(desc.len)
                 .ok_or(IoVecError::OverflowedDescriptor)
