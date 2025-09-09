@@ -187,7 +187,7 @@ pub mod tests {
     use crate::utils::u64_to_usize;
     use crate::vmm_config::machine_config::HugePageConfig;
     use crate::vstate::memory;
-    use crate::vstate::memory::{Bitmap, Bytes, GuestMemory, KvmRegion};
+    use crate::vstate::memory::{Bitmap, Bytes, GuestMemory, SlottedGuestMemoryRegion};
 
     const FILE_LEN: u32 = 1024;
     // 2 pages of memory should be enough to test read/write ops and also dirty tracking.
@@ -230,7 +230,7 @@ pub mod tests {
             )
             .unwrap()
             .into_iter()
-            .map(|region| KvmRegion::from_mmap_region(region, 0))
+            .map(|region| SlottedGuestMemoryRegion::static_from_mmap_region(region, 0))
             .collect(),
         )
         .unwrap()

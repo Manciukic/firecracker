@@ -17,7 +17,7 @@ use crate::vmm_config::boot_source::BootSourceConfig;
 use crate::vmm_config::instance_info::InstanceInfo;
 use crate::vmm_config::machine_config::HugePageConfig;
 use crate::vstate::memory;
-use crate::vstate::memory::{GuestMemoryMmap, GuestRegionMmap, KvmRegion};
+use crate::vstate::memory::{GuestMemoryMmap, GuestRegionMmap, SlottedGuestMemoryRegion};
 use crate::{EventManager, Vmm};
 
 pub mod mock_resources;
@@ -48,7 +48,7 @@ pub fn multi_region_mem(regions: &[(GuestAddress, usize)]) -> GuestMemoryMmap {
         memory::anonymous(regions.iter().copied(), false, HugePageConfig::None)
             .expect("Cannot initialize memory")
             .into_iter()
-            .map(|region| KvmRegion::from_mmap_region(region, 0))
+            .map(|region| SlottedGuestMemoryRegion::static_from_mmap_region(region, 0))
             .collect(),
     )
     .unwrap()
