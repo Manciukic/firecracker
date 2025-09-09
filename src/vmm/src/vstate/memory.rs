@@ -7,7 +7,6 @@
 
 use std::fs::File;
 use std::io::SeekFrom;
-use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use kvm_bindings::{KVM_MEM_LOG_DIRTY_PAGES, kvm_userspace_memory_region};
@@ -15,7 +14,6 @@ use serde::{Deserialize, Serialize};
 pub use vm_memory::bitmap::{AtomicBitmap, BS, Bitmap, BitmapSlice};
 pub use vm_memory::mmap::MmapRegionBuilder;
 use vm_memory::mmap::{MmapRegionError, NewBitmap};
-use vm_memory::volatile_memory::compute_offset;
 pub use vm_memory::{
     Address, ByteValued, Bytes, FileOffset, GuestAddress, GuestMemory, GuestMemoryRegion,
     GuestUsize, MemoryRegionAddress, MmapRegion, address,
@@ -28,7 +26,8 @@ use crate::utils::{get_page_size, u64_to_usize};
 use crate::vmm_config::machine_config::HugePageConfig;
 
 /// Type of GuestMemoryMmap.
-pub type GuestMemoryMmap = crate::vm_memory_vendored::GuestRegionCollection<KvmRegion>;
+pub type GuestMemoryMmap =
+    crate::vm_memory_vendored::GuestRegionCollection<SlottedGuestMemoryRegion>;
 /// Type of GuestRegionMmap.
 pub type GuestRegionMmap = vm_memory::GuestRegionMmap<Option<AtomicBitmap>>;
 /// Type of GuestMmapRegion.
@@ -55,14 +54,13 @@ pub enum MemoryError {
 
 /// A memory region, described in terms of `kvm_userspace_memory_region`
 #[derive(Debug)]
-pub struct KvmRegion {
-    region: kvm_userspace_memory_region,
-    bitmap: Option<AtomicBitmap>,
-    file_offset: Option<FileOffset>,
+pub struct SlottedGuestMemoryRegion {
+    region: GuestRegionMmap,
+    kvm_regions: Vec<kvm_userspace_memory_region>,
 }
 
-impl KvmRegion {
-    /// Constructs a new [`KvmRegion`] from the given [`kvm_userspace_memory_region`] and bitmap.
+impl SlottedGuestMemoryRegion {
+    /// Constructs a new [`SlottedGuestMemoryRegion`]
     ///
     /// # Safety
     ///
@@ -70,79 +68,72 @@ impl KvmRegion {
     /// `kvm_region.userspace_addr as *mut u8` is valid for reads and writes of length
     /// `kvm_region.memory_size`.
     pub unsafe fn new(
-        region: kvm_userspace_memory_region,
-        bitmap: Option<AtomicBitmap>,
-        file_offset: Option<FileOffset>,
+        region: GuestRegionMmap,
+        kvm_regions: Vec<kvm_userspace_memory_region>,
     ) -> Self {
-        KvmRegion {
+        SlottedGuestMemoryRegion {
             region,
-            bitmap,
-            file_offset,
+            kvm_regions,
         }
     }
 
-    pub(crate) fn from_mmap_region(region: GuestRegionMmap, slot: u32) -> Self {
-        let region = ManuallyDrop::new(region);
+    pub(crate) fn static_from_mmap_region(region: GuestRegionMmap, slot: u32) -> Self {
         let flags = if region.bitmap().is_some() {
             KVM_MEM_LOG_DIRTY_PAGES
         } else {
             0
         };
+        let kvm_region = kvm_userspace_memory_region {
+            slot,
+            flags,
+            guest_phys_addr: region.start_addr().0,
+            memory_size: region.len(),
+            userspace_addr: region.as_ptr() as u64,
+        };
+        let kvm_regions = vec![kvm_region];
 
         // SAFETY: `GuestRegionMmap` is essentially a fat pointer, and ensures that
         // region.as_ptr() is valid for reads and writes of length region.len(),
         // and by placing our region into a `ManuallyDrop` we ensure that its `Drop`
         // impl won't run and free the memory away from underneath us.
-        unsafe {
-            Self::new(
-                kvm_userspace_memory_region {
-                    slot,
-                    flags,
-                    guest_phys_addr: region.start_addr().0,
-                    memory_size: region.len(),
-                    userspace_addr: region.as_ptr() as u64,
-                },
-                region.bitmap().clone(),
-                region.file_offset().cloned(),
-            )
-        }
+        unsafe { Self::new(region, kvm_regions) }
     }
 
-    pub(crate) fn inner(&self) -> &kvm_userspace_memory_region {
+    pub(crate) fn inner(&self) -> &GuestRegionMmap {
         &self.region
+    }
+
+    pub(crate) fn kvm_regions(&self) -> &[kvm_userspace_memory_region] {
+        &self.kvm_regions
     }
 }
 
 #[allow(clippy::cast_possible_wrap)]
 #[allow(clippy::cast_possible_truncation)]
-impl GuestMemoryRegion for KvmRegion {
+impl GuestMemoryRegion for SlottedGuestMemoryRegion {
     type B = Option<AtomicBitmap>;
 
     fn len(&self) -> GuestUsize {
-        self.region.memory_size
+        self.region.len()
     }
 
     fn start_addr(&self) -> GuestAddress {
-        GuestAddress(self.region.guest_phys_addr)
+        self.region.start_addr()
     }
 
     fn bitmap(&self) -> &Self::B {
-        &self.bitmap
+        self.region.bitmap()
     }
 
     fn get_host_address(
         &self,
         addr: MemoryRegionAddress,
     ) -> vm_memory::guest_memory::Result<*mut u8> {
-        self.check_address(addr)
-            .ok_or(vm_memory::guest_memory::Error::InvalidBackendAddress)
-            .map(|addr| {
-                (self.region.userspace_addr as *mut u8).wrapping_offset(addr.raw_value() as isize)
-            })
+        self.region.get_host_address(addr)
     }
 
     fn file_offset(&self) -> Option<&FileOffset> {
-        self.file_offset.as_ref()
+        self.region.file_offset()
     }
 
     fn get_slice(
@@ -150,22 +141,7 @@ impl GuestMemoryRegion for KvmRegion {
         offset: MemoryRegionAddress,
         count: usize,
     ) -> vm_memory::guest_memory::Result<VolatileSlice<'_, BS<'_, Self::B>>> {
-        let offset = u64_to_usize(offset.0);
-        let end_addr = compute_offset(offset, count)? as u64;
-        if end_addr > self.len() {
-            return Err(vm_memory::guest_memory::Error::InvalidBackendAddress);
-        }
-
-        // SAFETY: Safe because we checked that offset + count was within our range and we only
-        // ever hand out volatile accessors.
-        unsafe {
-            Ok(VolatileSlice::with_bitmap(
-                (self.region.userspace_addr as *mut u8).add(offset),
-                count,
-                self.bitmap.slice_at(offset),
-                None,
-            ))
-        }
+        self.region.get_slice(offset, count)
     }
 }
 
@@ -347,45 +323,52 @@ impl GuestMemoryExtension for GuestMemoryMmap {
         let page_size = get_page_size().map_err(MemoryError::PageSize)?;
 
         let write_result = self.iter().try_for_each(|region| {
-            let kvm_bitmap = dirty_bitmap.get(&region.inner().slot).unwrap();
-            let firecracker_bitmap = region.bitmap();
-            let mut write_size = 0;
-            let mut dirty_batch_start: u64 = 0;
+            for kvm_region in region.kvm_regions() {
+                let kvm_bitmap = dirty_bitmap.get(&kvm_region.slot).unwrap();
+                let slot_offset =
+                    u64_to_usize(kvm_region.userspace_addr - (region.inner().as_ptr() as u64));
 
-            for (i, v) in kvm_bitmap.iter().enumerate() {
-                for j in 0..64 {
-                    let is_kvm_page_dirty = ((v >> j) & 1u64) != 0u64;
-                    let page_offset = ((i * 64) + j) * page_size;
-                    let is_firecracker_page_dirty = firecracker_bitmap.dirty_at(page_offset);
+                let firecracker_bitmap = region.bitmap();
+                let mut write_size = 0;
+                let mut dirty_batch_start: u64 = 0;
 
-                    if is_kvm_page_dirty || is_firecracker_page_dirty {
-                        // We are at the start of a new batch of dirty pages.
-                        if write_size == 0 {
-                            // Seek forward over the unmodified pages.
-                            writer
-                                .seek(SeekFrom::Start(writer_offset + page_offset as u64))
-                                .unwrap();
-                            dirty_batch_start = page_offset as u64;
+                for (i, v) in kvm_bitmap.iter().enumerate() {
+                    for j in 0..64 {
+                        let is_kvm_page_dirty = ((v >> j) & 1u64) != 0u64;
+                        let page_offset = ((i * 64) + j) * page_size + slot_offset;
+                        let is_firecracker_page_dirty = firecracker_bitmap.dirty_at(page_offset);
+
+                        if is_kvm_page_dirty || is_firecracker_page_dirty {
+                            // We are at the start of a new batch of dirty pages.
+                            if write_size == 0 {
+                                // Seek forward over the unmodified pages.
+                                writer
+                                    .seek(SeekFrom::Start(writer_offset + page_offset as u64))
+                                    .unwrap();
+                                dirty_batch_start = page_offset as u64;
+                            }
+                            write_size += page_size;
+                        } else if write_size > 0 {
+                            // We are at the end of a batch of dirty pages.
+                            writer.write_all_volatile(
+                                &region.get_slice(
+                                    MemoryRegionAddress(dirty_batch_start),
+                                    write_size,
+                                )?,
+                            )?;
+
+                            write_size = 0;
                         }
-                        write_size += page_size;
-                    } else if write_size > 0 {
-                        // We are at the end of a batch of dirty pages.
-                        writer.write_all_volatile(
-                            &region
-                                .get_slice(MemoryRegionAddress(dirty_batch_start), write_size)?,
-                        )?;
-
-                        write_size = 0;
                     }
                 }
-            }
 
-            if write_size > 0 {
-                writer.write_all_volatile(
-                    &region.get_slice(MemoryRegionAddress(dirty_batch_start), write_size)?,
-                )?;
+                if write_size > 0 {
+                    writer.write_all_volatile(
+                        &region.get_slice(MemoryRegionAddress(dirty_batch_start), write_size)?,
+                    )?;
+                }
+                writer_offset += region.len();
             }
-            writer_offset += region.len();
 
             Ok(())
         });
@@ -411,17 +394,21 @@ impl GuestMemoryExtension for GuestMemoryMmap {
     /// Stores the dirty bitmap inside into the internal bitmap
     fn store_dirty_bitmap(&self, dirty_bitmap: &DirtyBitmap, page_size: usize) {
         self.iter().for_each(|region| {
-            let kvm_bitmap = dirty_bitmap.get(&region.inner().slot).unwrap();
-            let firecracker_bitmap = region.bitmap();
+            for kvm_region in region.kvm_regions() {
+                let kvm_bitmap = dirty_bitmap.get(&kvm_region.slot).unwrap();
+                let slot_offset =
+                    u64_to_usize(kvm_region.userspace_addr - (region.inner().as_ptr() as u64));
+                let firecracker_bitmap = region.bitmap();
 
-            for (i, v) in kvm_bitmap.iter().enumerate() {
-                for j in 0..64 {
-                    let is_kvm_page_dirty = ((v >> j) & 1u64) != 0u64;
+                for (i, v) in kvm_bitmap.iter().enumerate() {
+                    for j in 0..64 {
+                        let is_kvm_page_dirty = ((v >> j) & 1u64) != 0u64;
 
-                    if is_kvm_page_dirty {
-                        let page_offset = ((i * 64) + j) * page_size;
+                        if is_kvm_page_dirty {
+                            let page_offset = ((i * 64) + j) * page_size + slot_offset;
 
-                        firecracker_bitmap.mark_dirty(page_offset, 1)
+                            firecracker_bitmap.mark_dirty(page_offset, 1)
+                        }
                     }
                 }
             }
@@ -472,12 +459,14 @@ mod tests {
     use crate::snapshot::Snapshot;
     use crate::utils::{get_page_size, mib_to_bytes};
 
-    fn kvmify(regions: Vec<GuestRegionMmap>) -> GuestMemoryMmap {
+    fn into_slotted_region(regions: Vec<GuestRegionMmap>) -> GuestMemoryMmap {
         GuestMemoryMmap::from_regions(
             regions
                 .into_iter()
                 .zip(0u32..) // assign dummy slots
-                .map(|(region, slot)| KvmRegion::from_mmap_region(region, slot))
+                .map(|(region, slot)| {
+                    SlottedGuestMemoryRegion::static_from_mmap_region(region, slot)
+                })
                 .collect(),
         )
         .unwrap()
@@ -516,8 +505,9 @@ mod tests {
             (GuestAddress(region_size as u64), region_size),     // pages 3-5
             (GuestAddress(region_size as u64 * 2), region_size), // pages 6-8
         ];
-        let guest_memory =
-            kvmify(anonymous(regions.into_iter(), true, HugePageConfig::None).unwrap());
+        let guest_memory = into_slotted_region(
+            anonymous(regions.into_iter(), true, HugePageConfig::None).unwrap(),
+        );
 
         let dirty_map = [
             // page 0: not dirty
@@ -576,7 +566,7 @@ mod tests {
         let region_size = page_size * 3;
 
         // Test with a single region
-        let guest_memory = kvmify(
+        let guest_memory = into_slotted_region(
             anonymous(
                 [(GuestAddress(0), region_size)].into_iter(),
                 false,
@@ -592,8 +582,9 @@ mod tests {
             (GuestAddress(region_size as u64), region_size),     // pages 3-5
             (GuestAddress(region_size as u64 * 2), region_size), // pages 6-8
         ];
-        let guest_memory =
-            kvmify(anonymous(regions.into_iter(), true, HugePageConfig::None).unwrap());
+        let guest_memory = into_slotted_region(
+            anonymous(regions.into_iter(), true, HugePageConfig::None).unwrap(),
+        );
         check_serde(&guest_memory);
     }
 
@@ -606,8 +597,9 @@ mod tests {
             (GuestAddress(0), page_size),
             (GuestAddress(page_size as u64 * 2), page_size),
         ];
-        let guest_memory =
-            kvmify(anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap());
+        let guest_memory = into_slotted_region(
+            anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap(),
+        );
 
         let expected_memory_state = GuestMemoryState {
             regions: vec![
@@ -630,8 +622,9 @@ mod tests {
             (GuestAddress(0), page_size * 3),
             (GuestAddress(page_size as u64 * 4), page_size * 3),
         ];
-        let guest_memory =
-            kvmify(anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap());
+        let guest_memory = into_slotted_region(
+            anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap(),
+        );
 
         let expected_memory_state = GuestMemoryState {
             regions: vec![
@@ -662,8 +655,9 @@ mod tests {
             (region_1_address, region_size),
             (region_2_address, region_size),
         ];
-        let guest_memory =
-            kvmify(anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap());
+        let guest_memory = into_slotted_region(
+            anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap(),
+        );
         // Check that Firecracker bitmap is clean.
         guest_memory.iter().for_each(|r| {
             assert!(!r.bitmap().dirty_at(0));
@@ -686,7 +680,7 @@ mod tests {
         guest_memory.dump(&mut memory_file).unwrap();
 
         let restored_guest_memory =
-            kvmify(snapshot_file(memory_file, memory_state.regions(), false).unwrap());
+            into_slotted_region(snapshot_file(memory_file, memory_state.regions(), false).unwrap());
 
         // Check that the region contents are the same.
         let mut restored_region = vec![0u8; page_size * 2];
@@ -713,8 +707,9 @@ mod tests {
             (region_1_address, region_size),
             (region_2_address, region_size),
         ];
-        let guest_memory =
-            kvmify(anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap());
+        let guest_memory = into_slotted_region(
+            anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap(),
+        );
         // Check that Firecracker bitmap is clean.
         guest_memory.iter().for_each(|r| {
             assert!(!r.bitmap().dirty_at(0));
@@ -744,7 +739,7 @@ mod tests {
 
         // We can restore from this because this is the first dirty dump.
         let restored_guest_memory =
-            kvmify(snapshot_file(file, memory_state.regions(), false).unwrap());
+            into_slotted_region(snapshot_file(file, memory_state.regions(), false).unwrap());
 
         // Check that the region contents are the same.
         let mut restored_region = vec![0u8; region_size];
@@ -800,8 +795,9 @@ mod tests {
             (region_1_address, region_size),
             (region_2_address, region_size),
         ];
-        let guest_memory =
-            kvmify(anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap());
+        let guest_memory = into_slotted_region(
+            anonymous(mem_regions.into_iter(), true, HugePageConfig::None).unwrap(),
+        );
 
         // Check that Firecracker bitmap is clean.
         guest_memory.iter().for_each(|r| {

@@ -380,7 +380,7 @@ impl<T: VhostUserHandleBackend> VhostUserHandleImpl<T> {
             let vhost_user_net_reg = VhostUserMemoryRegionInfo {
                 guest_phys_addr: region.start_addr().raw_value(),
                 memory_size: region.len(),
-                userspace_addr: region.inner().userspace_addr,
+                userspace_addr: region.inner().as_ptr() as u64,
                 mmap_offset,
                 mmap_handle,
             };
@@ -480,7 +480,7 @@ pub(crate) mod tests {
     use crate::devices::virtio::test_utils::default_interrupt;
     use crate::test_utils::create_tmp_socket;
     use crate::vstate::memory;
-    use crate::vstate::memory::{GuestAddress, KvmRegion};
+    use crate::vstate::memory::{GuestAddress, SlottedGuestMemoryRegion};
 
     pub(crate) fn create_mem(file: File, regions: &[(GuestAddress, usize)]) -> GuestMemoryMmap {
         GuestMemoryMmap::from_regions(
@@ -492,7 +492,7 @@ pub(crate) mod tests {
             )
             .unwrap()
             .into_iter()
-            .map(|region| KvmRegion::from_mmap_region(region, 0))
+            .map(|region| SlottedGuestMemoryRegion::static_from_mmap_region(region, 0))
             .collect(),
         )
         .unwrap()
@@ -803,7 +803,7 @@ pub(crate) mod tests {
             .map(|region| VhostUserMemoryRegionInfo {
                 guest_phys_addr: region.start_addr().raw_value(),
                 memory_size: region.len(),
-                userspace_addr: region.inner().userspace_addr,
+                userspace_addr: region.inner().as_ptr() as u64,
                 mmap_offset: region.file_offset().unwrap().start(),
                 mmap_handle: region.file_offset().unwrap().file().as_raw_fd(),
             })
