@@ -59,6 +59,7 @@ pub struct SlottedGuestMemoryRegion {
     kvm_regions: Vec<kvm_userspace_memory_region>,
 }
 
+#[allow(dead_code)]
 impl SlottedGuestMemoryRegion {
     /// Constructs a new [`SlottedGuestMemoryRegion`]
     ///
@@ -105,6 +106,64 @@ impl SlottedGuestMemoryRegion {
 
     pub(crate) fn kvm_regions(&self) -> &[kvm_userspace_memory_region] {
         &self.kvm_regions
+    }
+
+    pub(crate) fn dynamic_from_mmap_region(
+        region: GuestRegionMmap,
+        slot_from: u32,
+        slot_cnt: usize,
+    ) -> Self {
+        let mut kvm_regions = Vec::with_capacity(slot_cnt);
+        let slot_size = u64_to_usize(region.len()) / slot_cnt;
+        let flags = if region.bitmap().is_some() {
+            KVM_MEM_LOG_DIRTY_PAGES
+        } else {
+            0
+        };
+        for i in 0..slot_cnt {
+            let kvm_region = kvm_userspace_memory_region {
+                slot: slot_from + u32::try_from(i).unwrap(),
+                flags,
+                guest_phys_addr: region.start_addr().0 + (i * slot_size) as u64,
+                memory_size: slot_size as u64,
+                userspace_addr: region.as_ptr() as u64 + (i * slot_size) as u64,
+            };
+            kvm_regions.push(kvm_region);
+        }
+
+        // SAFETY: `GuestRegionMmap` is essentially a fat pointer, and ensures that
+        // region.as_ptr() is valid for reads and writes of length region.len(),
+        // and by placing our region into a `ManuallyDrop` we ensure that its `Drop`
+        // impl won't run and free the memory away from underneath us.
+        unsafe { Self::new(region, kvm_regions) }
+    }
+
+    pub(crate) fn kvm_regions_in_range(
+        &self,
+        start: GuestAddress,
+        len: GuestUsize,
+        partial: bool,
+    ) -> Result<&[kvm_userspace_memory_region], MemoryError> {
+        let mut start_idx = None;
+        let mut end_idx = None;
+        for (i, region) in self.kvm_regions.iter().enumerate() {
+            let intersects = if partial {
+                start.0 <= region.guest_phys_addr + region.memory_size
+                    && start.0 + len > region.guest_phys_addr
+            } else {
+                start.0 <= region.guest_phys_addr
+                    && start.0 + len >= region.guest_phys_addr + region.memory_size
+            };
+            if intersects {
+                if start_idx.is_none() {
+                    start_idx = Some(i);
+                }
+                end_idx = Some(i);
+            }
+        }
+        let start_idx = start_idx.ok_or(MemoryError::OffsetTooLarge)?;
+        let end_idx = end_idx.ok_or(MemoryError::OffsetTooLarge)?;
+        Ok(&self.kvm_regions[start_idx..end_idx + 1])
     }
 }
 
