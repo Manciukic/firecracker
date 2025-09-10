@@ -22,7 +22,7 @@ use std::fs::File;
 
 use linux_loader::loader::pe::PE as Loader;
 use linux_loader::loader::{Cmdline, KernelLoader};
-use vm_memory::GuestMemoryError;
+use vm_memory::{GuestMemoryError, GuestMemoryRegion};
 
 use crate::arch::{BootProtocol, EntryPoint, arch_memory_regions_with_gap};
 use crate::cpu_config::aarch64::{CpuConfiguration, CpuConfigurationError};
@@ -151,31 +151,29 @@ pub fn initrd_load_addr(guest_mem: &GuestMemoryMmap, initrd_size: usize) -> Opti
         usize_to_u64(initrd_size),
         usize_to_u64(super::GUEST_PAGE_SIZE),
     );
-    match GuestAddress(get_fdt_addr(guest_mem)).checked_sub(rounded_size) {
-        Some(offset) => {
-            if guest_mem.address_in_range(offset) {
-                Some(offset.raw_value())
-            } else {
-                None
-            }
-        }
-        None => None,
-    }
+    GuestAddress(get_fdt_addr(guest_mem))
+        .checked_sub(rounded_size)
+        .filter(|&addr| guest_mem.address_in_range(addr))
+        .map(|addr| addr.raw_value())
 }
 
 // Auxiliary function to get the address where the device tree blob is loaded.
 fn get_fdt_addr(mem: &GuestMemoryMmap) -> u64 {
+    // Pick the first (and only) memory region
+    let dram_region =  mem
+        .iter()
+        .next()
+        .unwrap();
+
     // If the memory allocated is smaller than the size allocated for the FDT,
     // we return the start of the DRAM so that
     // we allow the code to try and load the FDT.
-
-    if let Some(addr) = mem.last_addr().checked_sub(layout::FDT_MAX_SIZE as u64 - 1)
-        && mem.address_in_range(addr)
-    {
-        return addr.raw_value();
-    }
-
-    layout::DRAM_MEM_START
+    dram_region
+        .last_addr()
+        .checked_sub(layout::FDT_MAX_SIZE as u64 - 1)
+        .filter(|&addr| mem.address_in_range(addr))
+        .map(|addr| addr.raw_value())
+        .unwrap_or(layout::DRAM_MEM_START)
 }
 
 /// Load linux kernel into guest memory.
