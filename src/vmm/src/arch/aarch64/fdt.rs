@@ -230,7 +230,7 @@ fn create_memory_node(fdt: &mut FdtWriter, guest_mem: &GuestMemoryMmap) -> Resul
     // Pick the first (and only) memory region
     let dram_region = guest_mem
         .iter()
-        .next()
+        .find(|region| region.region_type() == GuestRegionType::Dram)
         .unwrap();
     let start_addr = dram_region
         .start_addr()
