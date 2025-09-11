@@ -546,6 +546,7 @@ def uvm_nano(uvm_plain):
     """
     uvm_plain.spawn()
     uvm_plain.basic_config(vcpu_count=2, mem_size_mib=256)
+    uvm_plain.api.memory_hotplug.put(total_size_mib=1024)
     return uvm_plain
 
 
@@ -609,6 +610,7 @@ def uvm_booted(
     uvm.basic_config(vcpu_count=vcpu_count, mem_size_mib=mem_size_mib)
     uvm.set_cpu_template(cpu_template)
     uvm.add_net_iface()
+    uvm.api.memory_hotplug.put(total_size_mib=1024)
     uvm.start()
     return uvm
 

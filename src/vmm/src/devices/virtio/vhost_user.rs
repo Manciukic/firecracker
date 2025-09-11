@@ -492,7 +492,7 @@ pub(crate) mod tests {
             )
             .unwrap()
             .into_iter()
-            .map(|region| SlottedGuestMemoryRegion::static_from_mmap_region(region, 0))
+            .map(|region| SlottedGuestMemoryRegion::dram_from_mmap_region(region, 0))
             .collect(),
         )
         .unwrap()
