@@ -22,7 +22,7 @@ use crate::device_manager::mmio::MMIODeviceInfo;
 use crate::device_manager::pci_mngr::PciDevices;
 use crate::devices::acpi::vmgenid::{VMGENID_MEM_SIZE, VmGenId};
 use crate::initrd::InitrdConfig;
-use crate::vstate::memory::{Address, GuestMemory, GuestMemoryMmap};
+use crate::vstate::memory::{Address, GuestMemory, GuestMemoryMmap, GuestRegionType};
 
 // This is a value for uniquely identifying the FDT node declaring the interrupt controller.
 const GIC_PHANDLE: u32 = 1;
