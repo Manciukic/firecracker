@@ -469,9 +469,9 @@ impl VirtioMem {
     /// Updates the requested size of the virtio-mem device.
     pub fn update_requested_size(
         &mut self,
-        requested_size: u64,
-        vm: &Vm,
+        requested_size_mib: usize,
     ) -> Result<(), VirtioMemError> {
+        let requested_size = usize_to_u64(mib_to_bytes(requested_size_mib));
         if !self.is_activated() {
             return Err(VirtioMemError::DeviceNotActive);
         }
