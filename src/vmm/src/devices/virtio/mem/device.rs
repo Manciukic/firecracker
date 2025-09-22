@@ -6,6 +6,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
+use bitvec::vec::BitVec;
 use log::info;
 use serde::{Deserialize, Serialize};
 use vm_memory::{
@@ -59,6 +60,8 @@ pub struct VirtioMem {
     // Device specific fields
     pub(crate) config: virtio_mem_config,
     pub(crate) slot_size: usize,
+    // Bitmap to track which blocks are plugged (1 bit per 2MB block)
+    pub(crate) plugged_blocks: BitVec,
     vm: Arc<Vm>,
 }
 
@@ -92,8 +95,9 @@ impl VirtioMem {
             block_size: mib_to_bytes(block_size_mib) as u64,
             ..Default::default()
         };
+        let plugged_blocks = BitVec::repeat(false, total_size_mib/block_size_mib);
 
-        Self::from_state(vm, queues, config, mib_to_bytes(slot_size_mib))
+        Self::from_state(vm, queues, config, mib_to_bytes(slot_size_mib), plugged_blocks)
     }
 
     pub fn from_state(
@@ -101,6 +105,7 @@ impl VirtioMem {
         queues: Vec<Queue>,
         config: virtio_mem_config,
         slot_size: usize,
+        plugged_blocks: BitVec,
     ) -> Result<Self, VirtioMemError> {
         let activate_event = EventFd::new(libc::EFD_NONBLOCK)?;
         let queue_events = (0..MEM_NUM_QUEUES)
@@ -117,6 +122,7 @@ impl VirtioMem {
             config,
             vm,
             slot_size,
+            plugged_blocks,
         })
     }
 
@@ -350,7 +356,8 @@ mod tests {
             usable_region_size,
             ..Default::default()
         };
-        let mem = VirtioMem::from_state(vm, queues, config, mib_to_bytes(slot_size_mib)).unwrap();
+        let plugged_blocks = BitVec::repeat(false, mib_to_bytes(region_size_mib) / mib_to_bytes(block_size_mib));
+        let mem = VirtioMem::from_state(vm, queues, config, mib_to_bytes(slot_size_mib), plugged_blocks).unwrap();
         assert_eq!(mem.total_size_mib(), region_size_mib);
         assert_eq!(mem.block_size_mib(), block_size_mib);
         assert_eq!(mem.slot_size_mib(), slot_size_mib);
