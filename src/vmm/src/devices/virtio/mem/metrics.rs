@@ -45,6 +45,30 @@ pub(super) struct VirtioMemDeviceMetrics {
     pub queue_event_fails: SharedIncMetric,
     /// Number of queue events handled
     pub queue_event_count: SharedIncMetric,
+    /// Latency of Plug operations
+    pub plug_agg: LatencyAggregateMetrics,
+    /// Number of Plug operations
+    pub plug_count: SharedIncMetric,
+    /// Number of Plug operations failed
+    pub plug_fail: SharedIncMetric,
+    /// Latency of Unplug operations
+    pub unplug_agg: LatencyAggregateMetrics,
+    /// Number of Unplug operations
+    pub unplug_count: SharedIncMetric,
+    /// Number of Unplug operations failed
+    pub unplug_fail: SharedIncMetric,
+    /// Latency of UnplugAll operations
+    pub unplug_all_agg: LatencyAggregateMetrics,
+    /// Number of UnplugAll operations
+    pub unplug_all_count: SharedIncMetric,
+    /// Number of UnplugAll operations failed
+    pub unplug_all_fail: SharedIncMetric,
+    /// Latency of State operations
+    pub state_agg: LatencyAggregateMetrics,
+    /// Number of State operations
+    pub state_count: SharedIncMetric,
+    /// Number of State operations failed
+    pub state_fail: SharedIncMetric,
 }
 
 impl VirtioMemDeviceMetrics {
@@ -54,6 +78,18 @@ impl VirtioMemDeviceMetrics {
             activate_fails: SharedIncMetric::new(),
             queue_event_fails: SharedIncMetric::new(),
             queue_event_count: SharedIncMetric::new(),
+            plug_agg: LatencyAggregateMetrics::new(),
+            plug_count: SharedIncMetric::new(),
+            plug_fail: SharedIncMetric::new(),
+            unplug_agg: LatencyAggregateMetrics::new(),
+            unplug_count: SharedIncMetric::new(),
+            unplug_fail: SharedIncMetric::new(),
+            unplug_all_agg: LatencyAggregateMetrics::new(),
+            unplug_all_count: SharedIncMetric::new(),
+            unplug_all_fail: SharedIncMetric::new(),
+            state_agg: LatencyAggregateMetrics::new(),
+            state_count: SharedIncMetric::new(),
+            state_fail: SharedIncMetric::new(),
         }
     }
 }
