@@ -426,11 +426,6 @@ impl Vm {
             .guest_memory
             .insert_region(Arc::clone(&arcd_region))?;
 
-        // TODO(virtio-mem): remove this once we add dynamic hotplugging
-        arcd_region
-            .plugged_slots()
-            .try_for_each(|mem_slot| self.register_kvm_region(mem_slot.into()))?;
-
         self.common.guest_memory = new_guest_memory;
         Ok(())
     }

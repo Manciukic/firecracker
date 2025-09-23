@@ -139,11 +139,10 @@ impl SlottedGuestMemoryRegion {
 
         Ok(SlottedGuestMemoryRegion {
             region,
-            region_type: GuestRegionType::Dram,
+            region_type: GuestRegionType::Hotpluggable,
             slot_from,
             slot_size,
-            // TODO(virtio-mem): we will unplug it by default in the future
-            plugged: Mutex::new(BitVec::repeat(true, slot_cnt)),
+            plugged: Mutex::new(BitVec::repeat(false, slot_cnt)),
         })
     }
 
