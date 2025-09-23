@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::KVM_IRQCHIP_IOAPIC;
 use kvm_bindings::{
-    KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI, KVM_MEM_LOG_DIRTY_PAGES, KVM_MSI_VALID_DEVID,
-    KvmIrqRouting, kvm_irq_routing_entry, kvm_userspace_memory_region,
+    KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI, KVM_MSI_VALID_DEVID, KvmIrqRouting,
+    kvm_irq_routing_entry, kvm_userspace_memory_region,
 };
 use kvm_ioctls::VmFd;
 use log::{debug, error};
@@ -36,7 +36,8 @@ use crate::snapshot::Persist;
 use crate::utils::u64_to_usize;
 use crate::vmm_config::snapshot::SnapshotType;
 use crate::vstate::memory::{
-    Address, GuestMemory, GuestMemoryExtension, GuestMemoryMmap, GuestMemoryRegion, GuestRegionMmap,
+    GuestMemory, GuestMemoryExtension, GuestMemoryMmap, GuestMemoryRegion, GuestMemoryRegionExt,
+    GuestMemoryRegionState, GuestMemoryState, GuestRegionMmap, MemoryError,
 };
 use crate::vstate::resources::ResourceAllocator;
 use crate::vstate::vcpu::VcpuError;
@@ -249,6 +250,8 @@ pub struct VmCommon {
     pub resource_allocator: Mutex<ResourceAllocator>,
     /// MMIO bus
     pub mmio_bus: Arc<vm_device::Bus>,
+    /// Next free kvm slot
+    next_slot: u32,
 }
 
 /// Errors associated with the wrappers over KVM ioctls.
@@ -275,7 +278,9 @@ pub enum VmError {
     /// Error calling mincore: {0}
     Mincore(vmm_sys_util::errno::Error),
     /// ResourceAllocator error: {0}
-    ResourceAllocator(#[from] vm_allocator::Error)
+    ResourceAllocator(#[from] vm_allocator::Error),
+    /// MemoryError error: {0}
+    MemoryError(#[from] MemoryError),
 }
 
 /// Contains Vm functions that are usable across CPU architectures
@@ -325,6 +330,7 @@ impl Vm {
             interrupts: Mutex::new(HashMap::with_capacity(GSI_MSI_END as usize + 1)),
             resource_allocator: Mutex::new(ResourceAllocator::new()),
             mmio_bus: Arc::new(vm_device::Bus::new()),
+            next_slot: 0,
         })
     }
 
@@ -360,39 +366,80 @@ impl Vm {
         Ok(())
     }
 
-    /// Register a new memory region to this [`Vm`].
-    pub fn register_memory_region(&mut self, region: GuestRegionMmap) -> Result<(), VmError> {
-        let next_slot = self
-            .guest_memory()
-            .num_regions()
-            .try_into()
-            .expect("Number of existing memory regions exceeds u32::MAX");
-        if self.common.max_memslots <= next_slot {
-            return Err(VmError::NotEnoughMemorySlots(self.common.max_memslots));
-        }
-
-        let flags = if region.bitmap().is_some() {
-            KVM_MEM_LOG_DIRTY_PAGES
-        } else {
-            0
-        };
-
-        let memory_region = kvm_userspace_memory_region {
-            slot: next_slot,
-            guest_phys_addr: region.start_addr().raw_value(),
-            memory_size: region.len(),
-            userspace_addr: region.as_ptr() as u64,
-            flags,
-        };
-
-        let new_guest_memory = self.common.guest_memory.insert_region(Arc::new(region))?;
-
+    pub(crate) fn register_kvm_region(
+        &self,
+        region: kvm_userspace_memory_region,
+    ) -> Result<(), VmError> {
         // SAFETY: Safe because the fd is a valid KVM file descriptor.
         unsafe {
             self.fd()
-                .set_user_memory_region(memory_region)
+                .set_user_memory_region(region)
                 .map_err(VmError::SetUserMemoryRegion)?;
         }
+
+        Ok(())
+    }
+
+    /// Register a new memory region to this [`Vm`].
+    pub fn register_memory_region(&mut self, region: GuestRegionMmap) -> Result<(), VmError> {
+        let arcd_region = Arc::new(GuestMemoryRegionExt::dram_from_mmap_region(
+            region,
+            self.common.next_slot,
+        ));
+
+        self.common.next_slot += 1;
+        if self.common.next_slot > self.common.max_memslots {
+            return Err(VmError::NotEnoughMemorySlots(self.common.max_memslots));
+        }
+
+        let new_guest_memory = self
+            .common
+            .guest_memory
+            .insert_region(Arc::clone(&arcd_region))?;
+
+        self.register_kvm_region(arcd_region.kvm_userspace_memory_region())?;
+
+        self.common.guest_memory = new_guest_memory;
+
+        Ok(())
+    }
+
+    /// Register a list of new memory regions to this [`Vm`].
+    pub fn restore_memory_regions(
+        &mut self,
+        regions: Vec<GuestRegionMmap>,
+        state: &GuestMemoryState,
+    ) -> Result<(), VmError> {
+        for (region, state) in regions.into_iter().zip(state.regions.iter()) {
+            self.restore_memory_region(region, state)?
+        }
+
+        Ok(())
+    }
+
+    /// Restore a new memory region to this [`Vm`].
+    pub fn restore_memory_region(
+        &mut self,
+        region: GuestRegionMmap,
+        state: &GuestMemoryRegionState,
+    ) -> Result<(), VmError> {
+        let arcd_region = Arc::new(GuestMemoryRegionExt::from_state(
+            region,
+            state,
+            self.common.next_slot,
+        )?);
+
+        self.common.next_slot += 1;
+        if self.common.next_slot > self.common.max_memslots {
+            return Err(VmError::NotEnoughMemorySlots(self.common.max_memslots));
+        }
+
+        let new_guest_memory = self
+            .common
+            .guest_memory
+            .insert_region(Arc::clone(&arcd_region))?;
+
+        self.register_kvm_region(arcd_region.kvm_userspace_memory_region())?;
 
         self.common.guest_memory = new_guest_memory;
 
@@ -419,28 +466,26 @@ impl Vm {
 
     /// Resets the KVM dirty bitmap for each of the guest's memory regions.
     pub fn reset_dirty_bitmap(&self) {
-        self.guest_memory()
-            .iter()
-            .zip(0u32..)
-            .for_each(|(region, slot)| {
-                let _ = self.fd().get_dirty_log(slot, u64_to_usize(region.len()));
-            });
+        self.guest_memory().iter().for_each(|region| {
+            let _ = self
+                .fd()
+                .get_dirty_log(region.slot(), u64_to_usize(region.len()));
+        });
     }
 
     /// Retrieves the KVM dirty bitmap for each of the guest's memory regions.
     pub fn get_dirty_bitmap(&self) -> Result<DirtyBitmap, VmError> {
         self.guest_memory()
             .iter()
-            .zip(0u32..)
-            .map(|(region, slot)| {
+            .map(|region| {
                 let bitmap = match region.bitmap() {
                     Some(_) => self
                         .fd()
-                        .get_dirty_log(slot, u64_to_usize(region.len()))
+                        .get_dirty_log(region.slot(), u64_to_usize(region.len()))
                         .map_err(VmError::GetDirtyLog)?,
-                    None => mincore_bitmap(region)?,
+                    None => mincore_bitmap(region.inner())?,
                 };
-                Ok((slot, bitmap))
+                Ok((region.slot(), bitmap))
             })
             .collect()
     }

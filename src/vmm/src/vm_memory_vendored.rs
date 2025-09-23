@@ -17,7 +17,7 @@ use vm_memory::{
     GuestMemoryRegion, MemoryRegionAddress,
 };
 
-use crate::vstate::memory::SlottedGuestMemoryRegion;
+use crate::vstate::memory::GuestMemoryRegionExt;
 
 /// [`GuestMemory`](trait.GuestMemory.html) implementation based on a homogeneous collection
 /// of [`GuestMemoryRegion`] implementations.
@@ -126,7 +126,7 @@ impl<R: GuestMemoryRegion> GuestMemory for GuestRegionCollection<R> {
 }
 
 // This impl will be subsumed by the default impl in vm-memory#312
-impl Bytes<MemoryRegionAddress> for SlottedGuestMemoryRegion {
+impl Bytes<MemoryRegionAddress> for GuestMemoryRegionExt {
     type E = GuestMemoryError;
 
     /// # Examples
