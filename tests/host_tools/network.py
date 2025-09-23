@@ -8,6 +8,7 @@ import random
 import re
 import signal
 import string
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -208,6 +209,12 @@ class SSHConnection:
 
             raise
 
+    def interactive(self):
+        """Start an interactive SSH session."""
+        self._check_liveness()
+        command = ["ip", "netns", "exec", self.netns, "ssh", *self.options, self.user_host]
+
+        subprocess.Popen(command).wait()
 
 def mac_from_ip(ip_address):
     """Create a MAC address based on the provided IP.
