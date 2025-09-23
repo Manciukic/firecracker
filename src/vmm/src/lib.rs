@@ -606,7 +606,9 @@ impl Vmm {
     /// Returns the current state of the memory hotplug device.
     pub fn update_memory_hotplug_size(&self, requested_size_mib: usize) -> Result<(), VmmError> {
         self.device_manager
-            .try_with_virtio_device_with_id(VIRTIO_MEM_DEV_ID, |dev: &mut VirtioMem| dev.update_requested_size(requested_size_mib))
+            .try_with_virtio_device_with_id(VIRTIO_MEM_DEV_ID, |dev: &mut VirtioMem| {
+                dev.update_requested_size(requested_size_mib)
+            })
             .map_err(VmmError::FindDeviceError)
     }
 

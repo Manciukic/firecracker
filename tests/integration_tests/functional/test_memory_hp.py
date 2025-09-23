@@ -3,8 +3,9 @@
 
 """Tests for verifying the virtio-mem is working correctly"""
 
-import pytest
 import time
+
+import pytest
 
 
 @pytest.mark.parametrize("use_vhost_user", [True, False])
@@ -109,10 +110,11 @@ def check_memory_usable(uvm):
     mem_available = get_mem_available(uvm)
     # number of 64b ints to allocate as 95% of available memory
     count = mem_available * 1024 * 95 // 100 // 8
-    
+
     uvm.ssh.check_output(
         f"python3 -c 'Q = 0x0123456789abcdef; a = [Q] * {count}; assert all(q == Q for q in a)'"
     )
+
 
 def check_hotplug_unplug(uvm, requested_size_mib):
     """Verifies memory can be hotplugged and then unplugged"""
@@ -124,7 +126,9 @@ def check_hotplug_unplug(uvm, requested_size_mib):
     _, stdout, _ = uvm.ssh.check_output(
         "dmesg | grep 'virtio_mem' | grep 'requested size' | tail -1"
     )
-    assert int(stdout.strip().split(":")[-1].strip(), base=0) == requested_size_mib << 20
+    assert (
+        int(stdout.strip().split(":")[-1].strip(), base=0) == requested_size_mib << 20
+    )
 
     # verify guest driver executed the request
     mem_total_after = get_mem_total(uvm)
@@ -171,7 +175,7 @@ def test_snapshot_restore_persistence(uvm_plain_6_1, microvm_factory):
     uvm.memory_monitor = None
     uvm.basic_config(
         mem_size_mib=256,
-        boot_args="console=ttyS0 reboot=k panic=1 memhp_default_state=online_movable"
+        boot_args="console=ttyS0 reboot=k panic=1 memhp_default_state=online_movable",
     )
     uvm.api.memory_hotplug.put(total_size_mib=1024)
     uvm.add_net_iface()
@@ -179,23 +183,17 @@ def test_snapshot_restore_persistence(uvm_plain_6_1, microvm_factory):
 
     uvm.api.memory_hotplug.patch(requested_size_mib=1024)
 
-    uvm.ssh.check_output(
-        "mount -o remount,size=1024M -t tmpfs tmpfs /dev/shm"
-    )
+    uvm.ssh.check_output("mount -o remount,size=1024M -t tmpfs tmpfs /dev/shm")
 
-    uvm.ssh.check_output(
-        "dd if=/dev/urandom of=/dev/shm/mem_hp_test bs=1M count=1024"
-    )
+    uvm.ssh.check_output("dd if=/dev/urandom of=/dev/shm/mem_hp_test bs=1M count=1024")
 
-    _, checksum_before, _ = uvm.ssh.check_output(
-        "sha256sum /dev/shm/mem_hp_test"
-    )
+    _, checksum_before, _ = uvm.ssh.check_output("sha256sum /dev/shm/mem_hp_test")
 
     snapshot = uvm.snapshot_full()
     restored_vm = microvm_factory.build()
     restored_vm.spawn()
     restored_vm.restore_from_snapshot(snapshot, resume=True)
-    
+
     _, checksum_after, _ = restored_vm.ssh.check_output(
         "sha256sum /dev/shm/mem_hp_test"
     )

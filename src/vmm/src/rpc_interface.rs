@@ -29,7 +29,9 @@ use crate::vmm_config::drive::{BlockDeviceConfig, BlockDeviceUpdateConfig, Drive
 use crate::vmm_config::entropy::{EntropyDeviceConfig, EntropyDeviceError};
 use crate::vmm_config::instance_info::InstanceInfo;
 use crate::vmm_config::machine_config::{MachineConfig, MachineConfigError, MachineConfigUpdate};
-use crate::vmm_config::memory_hotplug::{MemoryHotplugConfig, MemoryHotplugConfigError, MemoryHotplugSizeUpdate};
+use crate::vmm_config::memory_hotplug::{
+    MemoryHotplugConfig, MemoryHotplugConfigError, MemoryHotplugSizeUpdate,
+};
 use crate::vmm_config::metrics::{MetricsConfig, MetricsConfigError};
 use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::{
@@ -113,8 +115,8 @@ pub enum VmmAction {
     /// Set the memory hotplug device using `MemoryHotplugConfig` as input. This action can only be
     /// called before the microVM has booted.
     SetMemoryHotplugDevice(MemoryHotplugConfig),
-    /// Updates the memory hotplug device using `MemoryHotplugConfigUpdate` as input. This action can only be
-    /// called after the microVM has booted.
+    /// Updates the memory hotplug device using `MemoryHotplugConfigUpdate` as input. This action
+    /// can only be called after the microVM has booted.
     UpdateMemoryHotplugSize(MemoryHotplugSizeUpdate),
     /// Launch the microVM. This action can only be called before the microVM has booted.
     StartMicroVm,
@@ -1193,7 +1195,11 @@ mod tests {
         )));
         #[cfg(target_arch = "x86_64")]
         check_unsupported(preboot_request(VmmAction::SendCtrlAltDel));
-        check_unsupported(preboot_request(VmmAction::UpdateMemoryHotplugSize(MemoryHotplugSizeUpdate { requested_size_mib: 0 })));
+        check_unsupported(preboot_request(VmmAction::UpdateMemoryHotplugSize(
+            MemoryHotplugSizeUpdate {
+                requested_size_mib: 0,
+            },
+        )));
     }
 
     fn runtime_request(request: VmmAction) -> Result<VmmData, VmmActionError> {

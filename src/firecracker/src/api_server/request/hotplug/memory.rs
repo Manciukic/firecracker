@@ -25,9 +25,10 @@ pub(crate) fn parse_get_memory_hotplug() -> Result<ParsedRequest, RequestError> 
 
 pub(crate) fn parse_patch_memory_hotplug(body: &Body) -> Result<ParsedRequest, RequestError> {
     METRICS.patch_api_requests.hotplug_memory_count.inc();
-    let config = serde_json::from_slice::<MemoryHotplugSizeUpdate>(body.raw()).inspect_err(|_| {
-        METRICS.patch_api_requests.hotplug_memory_fails.inc();
-    })?;
+    let config =
+        serde_json::from_slice::<MemoryHotplugSizeUpdate>(body.raw()).inspect_err(|_| {
+            METRICS.patch_api_requests.hotplug_memory_fails.inc();
+        })?;
     Ok(ParsedRequest::new_sync(VmmAction::UpdateMemoryHotplugSize(
         config,
     )))
@@ -35,9 +36,10 @@ pub(crate) fn parse_patch_memory_hotplug(body: &Body) -> Result<ParsedRequest, R
 
 #[cfg(test)]
 mod tests {
-    use vmm::{devices::virtio::mem::{
+    use vmm::devices::virtio::mem::{
         VIRTIO_MEM_DEFAULT_BLOCK_SIZE_MIB, VIRTIO_MEM_DEFAULT_SLOT_SIZE_MIB,
-    }, vmm_config::memory_hotplug::MemoryHotplugSizeUpdate};
+    };
+    use vmm::vmm_config::memory_hotplug::MemoryHotplugSizeUpdate;
 
     use super::*;
     use crate::api_server::parsed_request::tests::vmm_action_from_request;

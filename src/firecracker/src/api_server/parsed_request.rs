@@ -28,7 +28,7 @@ use super::request::snapshot::{parse_patch_vm_state, parse_put_snapshot};
 use super::request::version::parse_get_version;
 use super::request::vsock::parse_put_vsock;
 use crate::api_server::request::hotplug::memory::{
-    parse_get_memory_hotplug, parse_patch_memory_hotplug, parse_put_memory_hotplug, 
+    parse_get_memory_hotplug, parse_patch_memory_hotplug, parse_put_memory_hotplug,
 };
 use crate::api_server::request::serial::parse_put_serial;
 

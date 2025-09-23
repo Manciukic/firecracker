@@ -30,7 +30,9 @@ use crate::cpu_config::templates::CustomCpuTemplate;
 use crate::initrd::InitrdConfig;
 use crate::utils::{align_up, u64_to_usize, usize_to_u64};
 use crate::vmm_config::machine_config::MachineConfig;
-use crate::vstate::memory::{Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, GuestRegionType};
+use crate::vstate::memory::{
+    Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, GuestRegionType,
+};
 use crate::vstate::vcpu::KvmVcpuError;
 use crate::{DeviceManager, Kvm, Vcpu, VcpuConfig, Vm, logger};
 

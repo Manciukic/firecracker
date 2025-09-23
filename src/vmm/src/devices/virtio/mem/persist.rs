@@ -9,7 +9,6 @@ use bitvec::vec::BitVec;
 use serde::{Deserialize, Serialize};
 use vm_memory::Address;
 
-use crate::utils::usize_to_u64;
 use crate::Vm;
 use crate::devices::virtio::generated::virtio_ids::VIRTIO_ID_MEM;
 use crate::devices::virtio::generated::virtio_mem::virtio_mem_config;
@@ -19,6 +18,7 @@ use crate::devices::virtio::mem::{
 use crate::devices::virtio::persist::{PersistError as VirtioStateError, VirtioDeviceState};
 use crate::devices::virtio::queue::FIRECRACKER_MAX_QUEUE_SIZE;
 use crate::snapshot::Persist;
+use crate::utils::usize_to_u64;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionMmap};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,8 +89,13 @@ impl Persist<'_> for VirtioMem {
             ..Default::default()
         };
 
-        let mut virtio_mem =
-            VirtioMem::from_state(constructor_args.vm, queues, config, state.slot_size, state.plugged_blocks.clone())?;
+        let mut virtio_mem = VirtioMem::from_state(
+            constructor_args.vm,
+            queues,
+            config,
+            state.slot_size,
+            state.plugged_blocks.clone(),
+        )?;
         virtio_mem.set_avail_features(state.virtio_state.avail_features);
         virtio_mem.set_acked_features(state.virtio_state.acked_features);
 

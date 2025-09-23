@@ -1,10 +1,10 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::mem::size_of;
 use std::cmp::min;
+use std::mem::size_of;
 
-use vm_memory::{GuestMemoryError, Address, ByteValued, Bytes, GuestAddress};
+use vm_memory::{Address, ByteValued, Bytes, GuestAddress, GuestMemoryError};
 
 use crate::devices::virtio::generated::virtio_mem;
 use crate::devices::virtio::mem::VirtioMemError;
@@ -15,7 +15,7 @@ use crate::vstate::memory::GuestMemoryMmap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestedRange {
     pub(crate) addr: GuestAddress,
-    pub(crate) nb_blocks: usize
+    pub(crate) nb_blocks: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,33 +30,32 @@ pub(crate) enum Request {
 impl From<virtio_mem::virtio_mem_req> for Request {
     fn from(req: virtio_mem::virtio_mem_req) -> Self {
         match req.type_.into() {
-            // SAFETY: union type is checked in the match 
+            // SAFETY: union type is checked in the match
             virtio_mem::VIRTIO_MEM_REQ_PLUG => unsafe {
                 Request::Plug(RequestedRange {
                     addr: GuestAddress(req.u.plug.addr),
-                    nb_blocks: req.u.plug.nb_blocks.into(), 
+                    nb_blocks: req.u.plug.nb_blocks.into(),
                 })
             },
-            // SAFETY: union type is checked in the match 
+            // SAFETY: union type is checked in the match
             virtio_mem::VIRTIO_MEM_REQ_UNPLUG => unsafe {
                 Request::Unplug(RequestedRange {
                     addr: GuestAddress(req.u.unplug.addr),
-                    nb_blocks: req.u.unplug.nb_blocks.into(), 
+                    nb_blocks: req.u.unplug.nb_blocks.into(),
                 })
             },
             virtio_mem::VIRTIO_MEM_REQ_UNPLUG_ALL => Request::UnplugAll,
-            // SAFETY: union type is checked in the match 
+            // SAFETY: union type is checked in the match
             virtio_mem::VIRTIO_MEM_REQ_STATE => unsafe {
                 Request::Unplug(RequestedRange {
                     addr: GuestAddress(req.u.state.addr),
-                    nb_blocks: req.u.state.nb_blocks.into(), 
+                    nb_blocks: req.u.state.nb_blocks.into(),
                 })
             },
             t => Request::Unsupported(t),
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub enum ResponseType {
@@ -73,7 +72,9 @@ impl From<ResponseType> for u16 {
             ResponseType::Nack => virtio_mem::VIRTIO_MEM_RESP_NACK,
             ResponseType::Busy => virtio_mem::VIRTIO_MEM_RESP_BUSY,
             ResponseType::Error => virtio_mem::VIRTIO_MEM_RESP_ERROR,
-        }.try_into().unwrap()
+        }
+        .try_into()
+        .unwrap()
     }
 }
 
@@ -91,7 +92,9 @@ impl From<BlockRangeState> for virtio_mem::virtio_mem_resp_state {
                 BlockRangeState::Plugged => virtio_mem::VIRTIO_MEM_STATE_PLUGGED,
                 BlockRangeState::Unplugged => virtio_mem::VIRTIO_MEM_STATE_UNPLUGGED,
                 BlockRangeState::Mixed => virtio_mem::VIRTIO_MEM_STATE_MIXED,
-            }.try_into().unwrap()
+            }
+            .try_into()
+            .unwrap(),
         }
     }
 }
@@ -110,7 +113,7 @@ impl Response {
             state: None,
         }
     }
-    
+
     pub(crate) fn ack() -> Self {
         Response {
             resp_type: ResponseType::Ack,
@@ -132,13 +135,15 @@ unsafe impl ByteValued for virtio_mem::virtio_mem_req {}
 // SAFETY: Plain data structures
 unsafe impl ByteValued for virtio_mem::virtio_mem_resp {}
 
-
 impl From<Response> for virtio_mem::virtio_mem_resp {
     fn from(resp: Response) -> Self {
-        let mut out  = virtio_mem::virtio_mem_resp { type_: resp.resp_type.into(), ..Default::default() };
+        let mut out = virtio_mem::virtio_mem_resp {
+            type_: resp.resp_type.into(),
+            ..Default::default()
+        };
         if let Some(state) = resp.state {
             out.u.state = state.into();
         }
         out
     }
-}   
+}
