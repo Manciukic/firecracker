@@ -247,15 +247,15 @@ impl VirtioMem {
             return Err(VirtioMemError::DescriptorLengthTooSmall);
         }
 
-        Ok((request.into(), resp_desc.addr, resp_desc.index))
+        Ok((request.into(), resp_desc.addr, avail_desc.index))
     }
 
-    fn write_response(&mut self, resp: Response, resp_addr: GuestAddress, resp_index: u16) -> Result<(), VirtioMemError> {
+    fn write_response(&mut self, resp: Response, resp_addr: GuestAddress, used_idx: u16) -> Result<(), VirtioMemError> {
         self.guest_memory()
             .write_obj(virtio_mem::virtio_mem_resp::from(resp), resp_addr)
             .map_err(|_| VirtioMemError::DescriptorWriteFailed)
             .map(|_| size_of::<virtio_mem::virtio_mem_resp>())?;
-        self.queues[MEM_QUEUE].add_used(resp_index, u32::try_from(std::mem::size_of::<virtio_mem::virtio_mem_resp>()).unwrap()).map_err(VirtioMemError::QueueError)
+        self.queues[MEM_QUEUE].add_used(used_idx, u32::try_from(std::mem::size_of::<virtio_mem::virtio_mem_resp>()).unwrap()).map_err(VirtioMemError::QueueError)
     }
 
     fn checked_block_range(&self, range: &RequestedRange) -> Result<Range<usize>, VirtioMemError> {
@@ -282,7 +282,7 @@ impl VirtioMem {
         Ok(())
     }
 
-    fn handle_plug_request(&mut self, range: &RequestedRange, resp_addr: GuestAddress, resp_idx: u16) -> Result<(), VirtioMemError> {
+    fn handle_plug_request(&mut self, range: &RequestedRange, resp_addr: GuestAddress, used_idx: u16) -> Result<(), VirtioMemError> {
         METRICS.plug_count.inc();
         let _metric = METRICS.plug_agg.record_latency_metrics();
         let response = self.is_range_plugged(range).and_then(|state| match state {
@@ -295,10 +295,10 @@ impl VirtioMem {
         }, 
         |_| Response::ack()
         );
-        self.write_response(response, resp_addr, resp_idx)
+        self.write_response(response, resp_addr, used_idx)
     }
 
-    fn handle_unplug_request(&mut self, range: &RequestedRange, resp_addr: GuestAddress, resp_idx: u16) -> Result<(), VirtioMemError> {
+    fn handle_unplug_request(&mut self, range: &RequestedRange, resp_addr: GuestAddress, used_idx: u16) -> Result<(), VirtioMemError> {
         METRICS.unplug_count.inc();
         let _metric = METRICS.unplug_agg.record_latency_metrics();
         let response = self.is_range_plugged(range).and_then(|state| match state {
@@ -311,10 +311,10 @@ impl VirtioMem {
         }, 
         |_| Response::ack()
         );
-        self.write_response(response, resp_addr, resp_idx)
+        self.write_response(response, resp_addr, used_idx)
     }
 
-    fn handle_unplug_all_request(&mut self, resp_addr: GuestAddress, resp_idx: u16) -> Result<(), VirtioMemError> {
+    fn handle_unplug_all_request(&mut self, resp_addr: GuestAddress, used_idx: u16) -> Result<(), VirtioMemError> {
         METRICS.unplug_all_count.inc();
         let _metric = METRICS.unplug_all_agg.record_latency_metrics();
         let range = RequestedRange {
@@ -329,10 +329,10 @@ impl VirtioMem {
         }, 
         |_| Response::ack()
         );
-        self.write_response(response, resp_addr, resp_idx)
+        self.write_response(response, resp_addr, used_idx)
     }
 
-    fn handle_state_request(&mut self, range: &RequestedRange, resp_addr: GuestAddress, resp_idx: u16) -> Result<(), VirtioMemError> {
+    fn handle_state_request(&mut self, range: &RequestedRange, resp_addr: GuestAddress, used_idx: u16) -> Result<(), VirtioMemError> {
         METRICS.state_count.inc();
         let _metric = METRICS.state_agg.record_latency_metrics();
         let response = self.is_range_plugged(range).map_or_else(|err| {
@@ -342,7 +342,7 @@ impl VirtioMem {
         }, 
         Response::ack_with_state
         );
-        self.write_response(response, resp_addr, resp_idx)
+        self.write_response(response, resp_addr, used_idx)
     }
 
     fn process_mem_queue(&mut self) -> Result<(), VirtioMemError> {
@@ -351,14 +351,14 @@ impl VirtioMem {
 
             let index = desc.index;
 
-            let (req, resp_addr, resp_idx) = self.parse_request(&desc)?;
+            let (req, resp_addr, used_idx) = self.parse_request(&desc)?;
             debug!("virtio-mem: Request: {:?}", req);
             // Handle request and write response
             match req {
-                Request::State(ref range) => self.handle_state_request(range, resp_addr, resp_idx),
-                Request::Plug(ref range) => self.handle_plug_request(range, resp_addr, resp_idx),
-                Request::Unplug(ref range) => self.handle_unplug_request(range, resp_addr, resp_idx),
-                Request::UnplugAll => self.handle_unplug_all_request(resp_addr, resp_idx),
+                Request::State(ref range) => self.handle_state_request(range, resp_addr, used_idx),
+                Request::Plug(ref range) => self.handle_plug_request(range, resp_addr, used_idx),
+                Request::Unplug(ref range) => self.handle_unplug_request(range, resp_addr, used_idx),
+                Request::UnplugAll => self.handle_unplug_all_request(resp_addr, used_idx),
                 Request::Unsupported(t) => {
                     Err(VirtioMemError::UnknownRequestType(t))
                 }
