@@ -610,7 +610,6 @@ def uvm_booted(
     uvm.basic_config(vcpu_count=vcpu_count, mem_size_mib=mem_size_mib)
     uvm.set_cpu_template(cpu_template)
     uvm.add_net_iface()
-    uvm.api.memory_hotplug.put(total_size_mib=1024)
     uvm.start()
     return uvm
 
