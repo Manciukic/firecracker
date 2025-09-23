@@ -37,6 +37,13 @@ impl From<virtio_mem::virtio_mem_req> for Request {
                     nb_blocks: req.u.plug.nb_blocks.into(), 
                 })
             },
+            // SAFETY: union type is checked in the match 
+            virtio_mem::VIRTIO_MEM_REQ_UNPLUG => unsafe {
+                Request::Unplug(RequestedRange {
+                    addr: GuestAddress(req.u.unplug.addr),
+                    nb_blocks: req.u.unplug.nb_blocks.into(), 
+                })
+            },
             virtio_mem::VIRTIO_MEM_REQ_UNPLUG_ALL => Request::UnplugAll,
             // SAFETY: union type is checked in the match 
             virtio_mem::VIRTIO_MEM_REQ_STATE => unsafe {
