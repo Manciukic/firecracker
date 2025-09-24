@@ -17,7 +17,7 @@ use crate::vmm_config::boot_source::BootSourceConfig;
 use crate::vmm_config::instance_info::InstanceInfo;
 use crate::vmm_config::machine_config::HugePageConfig;
 use crate::vstate::memory;
-use crate::vstate::memory::{GuestMemoryMmap, GuestRegionMmap, GuestMemoryRegionExt};
+use crate::vstate::memory::{GuestMemoryMmap, GuestMemoryRegionExt, GuestRegionMmap};
 use crate::{EventManager, Vmm};
 
 pub mod mock_resources;
