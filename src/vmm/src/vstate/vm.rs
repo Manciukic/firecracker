@@ -287,7 +287,9 @@ pub enum VmError {
     /// Error calling mincore: {0}
     Mincore(vmm_sys_util::errno::Error),
     /// ResourceAllocator error: {0}
-    ResourceAllocator(#[from] vm_allocator::Error)
+    ResourceAllocator(#[from] vm_allocator::Error),
+    /// mprotect error: {0}
+    Mprotect(std::io::Error),
 }
 
 /// Contains Vm functions that are usable across CPU architectures
@@ -440,6 +442,22 @@ impl Vm {
         } else {
             0
         };
+
+        let ret = unsafe {
+            libc::mprotect(
+                region.as_ptr().cast(),
+                u64_to_usize(region.len()),
+                if register {
+                    libc::PROT_READ | libc::PROT_WRITE
+                } else {
+                    libc::PROT_NONE
+                },
+            )
+        };
+        if ret != 0 {
+            error!("mprotect failed: {ret}");
+            return Err(VmError::Mprotect(std::io::Error::last_os_error()));
+        }
 
         let memory_region = kvm_userspace_memory_region {
             slot,
