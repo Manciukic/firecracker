@@ -59,6 +59,8 @@ pub enum MemoryError {
     Unaligned,
     /// Memory slot is invalid: {0}
     InvalidSlot(u32),
+    /// Error protecting memory slot: {0}
+    Mprotect(std::io::Error),
 }
 
 /// Type of the guest region
@@ -110,6 +112,29 @@ impl From<&GuestMemorySlot<'_>> for kvm_userspace_memory_region {
             guest_phys_addr: mem_slot.guest_addr.raw_value(),
             memory_size: mem_slot.slice.len() as u64,
             userspace_addr: mem_slot.slice.ptr_guard().as_ptr() as u64,
+        }
+    }
+}
+
+impl<'a> GuestMemorySlot<'a> {
+    pub(crate) fn protect(&self, accessible: bool) -> Result<(), MemoryError> {
+        let prot = if accessible {
+            libc::PROT_READ | libc::PROT_WRITE
+        } else {
+            libc::PROT_NONE
+        };
+        // SAFETY: Parameters refer to an existing host memory region
+        let ret = unsafe {
+            libc::mprotect(
+                self.slice.ptr_guard_mut().as_ptr().cast(),
+                self.slice.len(),
+                prot,
+            )
+        };
+        if ret != 0 {
+            Err(MemoryError::Mprotect(std::io::Error::last_os_error()))
+        } else {
+            Ok(())
         }
     }
 }
@@ -249,11 +274,20 @@ impl GuestRegionMmapExt {
         if prev == plug {
             return Ok(());
         }
+
         let mut kvm_region = kvm_userspace_memory_region::from(&mem_slot);
-        if !plug {
+        if plug {
+            // make it accessible _before_ adding it to KVM
+            mem_slot.protect(true)?;
+            vm.set_user_memory_region(kvm_region)?;
+        } else {
+            // to remove it we need to pass a size of zero
             kvm_region.memory_size = 0;
+            vm.set_user_memory_region(kvm_region)?;
+            // make it unaccessible _after_ removing it from KVM
+            mem_slot.protect(false)?;
         }
-        vm.set_user_memory_region(kvm_region)
+        Ok(())
     }
 
     pub(crate) fn discard_range(
