@@ -23,9 +23,10 @@ pub use vm_memory::{
 use vm_memory::{Error as VmMemoryError, GuestMemoryError, VolatileSlice, WriteVolatile};
 use vmm_sys_util::errno;
 
-use crate::DirtyBitmap;
 use crate::utils::{get_page_size, u64_to_usize};
 use crate::vmm_config::machine_config::HugePageConfig;
+use crate::vstate::vm::VmError;
+use crate::{DirtyBitmap, Vm};
 
 /// Type of GuestMemoryMmap.
 pub type GuestMemoryMmap = crate::vm_memory_vendored::GuestRegionCollection<GuestRegionMmapExt>;
@@ -99,8 +100,8 @@ pub struct GuestMemorySlot {
     pub(crate) flags: u32,
 }
 
-impl From<GuestMemorySlot> for kvm_userspace_memory_region {
-    fn from(mem_slot: GuestMemorySlot) -> Self {
+impl From<&GuestMemorySlot> for kvm_userspace_memory_region {
+    fn from(mem_slot: &GuestMemorySlot) -> Self {
         kvm_userspace_memory_region {
             flags: mem_slot.flags,
             slot: mem_slot.slot,
@@ -108,6 +109,14 @@ impl From<GuestMemorySlot> for kvm_userspace_memory_region {
             memory_size: mem_slot.size as u64,
             userspace_addr: mem_slot.host_addr as u64,
         }
+    }
+}
+
+fn addr_in_range(addr: GuestAddress, start: GuestAddress, len: usize) -> bool {
+    if let Some(end) = start.checked_add(len as u64) {
+        addr >= start && addr < end
+    } else {
+        false
     }
 }
 
@@ -139,8 +148,7 @@ impl GuestRegionMmapExt {
             region_type: GuestRegionType::Hotpluggable,
             slot_from,
             slot_size,
-            // TODO(virtio-mem): these should start unplugged when dynamic slots are implemented
-            plugged: Mutex::new(BitVec::repeat(true, slot_cnt)),
+            plugged: Mutex::new(BitVec::repeat(false, slot_cnt)),
         }
     }
 
@@ -202,6 +210,39 @@ impl GuestRegionMmapExt {
             })
             .collect::<Vec<_>>()
             .into_iter()
+    }
+
+    pub(crate) fn slots_intersecting_range(
+        &self,
+        from: GuestAddress,
+        len: usize,
+    ) -> impl Iterator<Item = GuestMemorySlot> {
+        self.all_slots().filter(move |slot| {
+            if let Some(slot_end) = slot.guest_addr.checked_add(slot.size as u64) {
+                addr_in_range(slot.guest_addr, from, len) || addr_in_range(slot_end, from, len)
+            } else {
+                false
+            }
+        })
+    }
+
+    /// (un)plug a slot from an Hotpluggable memory region
+    pub(crate) fn update_slot(&self, vm: &Vm, slot: u32, plug: bool) -> Result<(), VmError> {
+        // This function can only be called on hotpluggable regions!
+        assert!(self.region_type == GuestRegionType::Hotpluggable);
+
+        let mem_slot = self.mem_slot(slot).ok_or(MemoryError::InvalidSlot(slot))?;
+        let mut bitmap_guard = self.plugged.lock().unwrap();
+        let prev = bitmap_guard.replace((slot - self.slot_from) as usize, plug);
+        // do not do anything if the state is what we're trying to set
+        if prev == plug {
+            return Ok(());
+        }
+        let mut kvm_region = kvm_userspace_memory_region::from(&mem_slot);
+        if !plug {
+            kvm_region.memory_size = 0;
+        }
+        vm.set_user_memory_region(kvm_region)
     }
 
     pub(crate) fn discard_range(

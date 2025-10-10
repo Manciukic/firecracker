@@ -33,7 +33,9 @@ use crate::devices::virtio::transport::{VirtioInterrupt, VirtioInterruptType};
 use crate::logger::{IncMetric, debug, error};
 use crate::utils::{bytes_to_mib, mib_to_bytes, u64_to_usize, usize_to_u64};
 use crate::vstate::interrupts::InterruptError;
-use crate::vstate::memory::{ByteValued, GuestMemoryExtension, GuestMemoryMmap, GuestRegionMmap};
+use crate::vstate::memory::{
+    ByteValued, GuestMemoryExtension, GuestMemoryMmap, GuestRegionMmap, GuestRegionType,
+};
 use crate::vstate::vm::VmError;
 use crate::{Vm, impl_device_type};
 
@@ -76,6 +78,8 @@ pub enum VirtioMemError {
     PlugRequestIsTooBig,
     /// The requested range cannot be unplugged because it's {0:?}.
     UnplugRequestBlockStateInvalid(BlockRangeState),
+    /// There was an error updating the KVM slot.
+    UpdateKvmSlot(VmError),
 }
 
 #[derive(Debug)]
@@ -492,6 +496,32 @@ impl VirtioMem {
         &self.activate_event
     }
 
+    fn update_kvm_slots(&self, updated_range: &RequestedRange) -> Result<(), VirtioMemError> {
+        let hp_region = self
+            .guest_memory()
+            .iter()
+            .find(|r| r.region_type == GuestRegionType::Hotpluggable)
+            .expect("there should be one and only one hotpluggable region");
+        hp_region
+            .slots_intersecting_range(
+                updated_range.addr,
+                self.nb_blocks_to_len(updated_range.nb_blocks),
+            )
+            .try_for_each(|slot| {
+                let slot_range = RequestedRange {
+                    addr: slot.guest_addr,
+                    nb_blocks: slot.size / u64_to_usize(self.config.block_size),
+                };
+                match self.range_state(&slot_range) {
+                    BlockRangeState::Mixed | BlockRangeState::Plugged => {
+                        hp_region.update_slot(&self.vm, slot.slot, true)
+                    }
+                    BlockRangeState::Unplugged => hp_region.update_slot(&self.vm, slot.slot, false),
+                }
+                .map_err(VirtioMemError::UpdateKvmSlot)
+            })
+    }
+
     fn update_range(&mut self, range: &RequestedRange, plug: bool) -> Result<(), VirtioMemError> {
         // Update internal state
         let block_range = self.unchecked_block_range(range);
@@ -514,9 +544,7 @@ impl VirtioMem {
                 });
         }
 
-        // TODO: update KVM slots to plug/unplug them
-
-        Ok(())
+        self.update_kvm_slots(range)
     }
 
     /// Updates the requested size of the virtio-mem device.

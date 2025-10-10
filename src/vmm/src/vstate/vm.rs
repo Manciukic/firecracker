@@ -199,7 +199,7 @@ impl Vm {
 
         region
             .plugged_slots()
-            .try_for_each(|slot| self.set_user_memory_region(slot.into()))?;
+            .try_for_each(|slot| self.set_user_memory_region((&slot).into()))?;
 
         self.common.guest_memory = new_guest_memory;
 
