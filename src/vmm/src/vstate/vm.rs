@@ -29,7 +29,6 @@ use crate::arch::{GSI_MSI_END, host_page_size};
 use crate::logger::info;
 use crate::pci::{DeviceRelocation, PciDevice};
 use crate::persist::CreateSnapshotError;
-use crate::utils::u64_to_usize;
 use crate::vmm_config::snapshot::SnapshotType;
 use crate::vstate::bus::Bus;
 use crate::vstate::interrupts::{InterruptError, MsixVector, MsixVectorConfig, MsixVectorGroup};
@@ -198,7 +197,9 @@ impl Vm {
             .guest_memory
             .insert_region(Arc::clone(&region))?;
 
-        self.set_user_memory_region(region.kvm_userspace_memory_region())?;
+        region
+            .plugged_slots()
+            .try_for_each(|slot| self.set_user_memory_region(slot.into()))?;
 
         self.common.guest_memory = new_guest_memory;
 
@@ -226,10 +227,18 @@ impl Vm {
     pub fn register_hotpluggable_memory_region(
         &mut self,
         region: GuestRegionMmap,
+        slot_size: usize,
     ) -> Result<(), VmError> {
+        // caller should ensure the slot size divides the region length.
+        assert!(region.len().is_multiple_of(slot_size as u64));
+        let slot_cnt = (region.len() / (slot_size as u64))
+            .try_into()
+            .map_err(|_| VmError::NotEnoughMemorySlots(self.common.max_memslots))?;
         let arcd_region = Arc::new(GuestRegionMmapExt::hotpluggable_from_mmap_region(
             region,
-            self.allocate_slot_ids(1)?,
+            self.allocate_slot_ids(slot_cnt)?,
+            slot_size,
+            slot_cnt as usize,
         ));
 
         self._register_memory_region(arcd_region)
@@ -277,9 +286,9 @@ impl Vm {
     /// Resets the KVM dirty bitmap for each of the guest's memory regions.
     pub fn reset_dirty_bitmap(&self) {
         self.guest_memory().iter().for_each(|region| {
-            let _ = self
-                .fd()
-                .get_dirty_log(region.slot, u64_to_usize(region.len()));
+            region.all_slots().for_each(|mem_slot| {
+                let _ = self.fd().get_dirty_log(mem_slot.slot, mem_slot.size);
+            })
         });
     }
 
@@ -287,15 +296,16 @@ impl Vm {
     pub fn get_dirty_bitmap(&self) -> Result<DirtyBitmap, VmError> {
         self.guest_memory()
             .iter()
-            .map(|region| {
+            .flat_map(|region| region.plugged_slots().map(move |slot| (region, slot)))
+            .map(|(region, mem_slot)| {
                 let bitmap = match region.bitmap() {
                     Some(_) => self
                         .fd()
-                        .get_dirty_log(region.slot, u64_to_usize(region.len()))
+                        .get_dirty_log(mem_slot.slot, mem_slot.size)
                         .map_err(VmError::GetDirtyLog)?,
-                    None => mincore_bitmap(&region.inner)?,
+                    None => mincore_bitmap(mem_slot.host_addr, mem_slot.size)?,
                 };
-                Ok((region.slot, bitmap))
+                Ok((mem_slot.slot, bitmap))
             })
             .collect()
     }
@@ -478,7 +488,7 @@ impl Vm {
 
 /// Use `mincore(2)` to overapproximate the dirty bitmap for the given memslot. To be used
 /// if a diff snapshot is requested, but dirty page tracking wasn't enabled.
-fn mincore_bitmap(region: &GuestRegionMmap) -> Result<Vec<u64>, VmError> {
+fn mincore_bitmap(addr: *mut u8, len: usize) -> Result<Vec<u64>, VmError> {
     // TODO: Once Host 5.10 goes out of support, we can make this more robust and work on
     // swap-enabled systems, by doing mlock2(MLOCK_ONFAULT)/munlock() in this function (to
     // force swapped-out pages to get paged in, so that mincore will consider them incore).
@@ -489,8 +499,8 @@ fn mincore_bitmap(region: &GuestRegionMmap) -> Result<Vec<u64>, VmError> {
     // is a hugetlbfs VMA (e.g. to report a single hugepage as "present", mincore will
     // give us 512 4k markers with the lowest bit set).
     let page_size = host_page_size();
-    let mut mincore_bitmap = vec![0u8; u64_to_usize(region.len()) / page_size];
-    let mut bitmap = vec![0u64; (u64_to_usize(region.len()) / page_size).div_ceil(64)];
+    let mut mincore_bitmap = vec![0u8; len / page_size];
+    let mut bitmap = vec![0u64; (len / page_size).div_ceil(64)];
 
     // SAFETY: The safety invariants of GuestRegionMmap ensure that region.as_ptr() is a valid
     // userspace mapping of size region.len() bytes. The bitmap has exactly one byte for each
@@ -498,13 +508,7 @@ fn mincore_bitmap(region: &GuestRegionMmap) -> Result<Vec<u64>, VmError> {
     // KVM_MEM_LOG_DIRTY_PAGES, but rather it uses 8 bits per page (e.g. 1 byte), setting the
     // least significant bit to 1 if the page corresponding to a byte is in core (available in
     // the page cache and resolvable via just a minor page fault).
-    let r = unsafe {
-        libc::mincore(
-            region.as_ptr().cast::<libc::c_void>(),
-            u64_to_usize(region.len()),
-            mincore_bitmap.as_mut_ptr(),
-        )
-    };
+    let r = unsafe { libc::mincore(addr.cast(), len, mincore_bitmap.as_mut_ptr()) };
 
     if r != 0 {
         return Err(VmError::Mincore(vmm_sys_util::errno::Error::last()));

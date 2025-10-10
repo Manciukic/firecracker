@@ -675,6 +675,7 @@ pub(crate) mod test_utils {
             .unwrap()
             .pop()
             .unwrap(),
+            mib_to_bytes(128),
         );
         let vm = Arc::new(vm);
         VirtioMem::new(vm, 1024, 2, 128).unwrap()
