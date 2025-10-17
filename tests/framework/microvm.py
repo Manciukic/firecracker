@@ -659,7 +659,7 @@ class Microvm:
             if log_show_origin:
                 self.jailer.extra_args["show-log-origin"] = None
 
-        if serial_out_path is not None:
+        if serial_out_path is not None and self.jailer.daemonize:
             self.serial_out_path = Path(self.path) / serial_out_path
             self.serial_out_path.touch()
             self.create_jailed_resource(self.serial_out_path)
@@ -728,7 +728,7 @@ class Microvm:
         # Firecracker process itself at least came up by checking
         # for the startup log message. Otherwise, you're on your own kid.
         if "config-file" in self.jailer.extra_args and self.iface:
-            assert not serial_out_path
+            assert not self.serial_out_path
             self.wait_for_ssh_up()
         elif "no-api" not in self.jailer.extra_args:
             if self.log_file and log_level in ("Trace", "Debug", "Info"):
@@ -736,10 +736,10 @@ class Microvm:
             else:
                 self._wait_for_api_socket()
 
-            if serial_out_path is not None:
-                self.api.serial.put(serial_out_path=serial_out_path)
+            if self.serial_out_path is not None and self.jailer.daemonize:
+                self.api.serial.put(serial_out_path=self.serial_out_path)
         elif self.log_file and log_level in ("Trace", "Debug", "Info"):
-            assert not serial_out_path
+            assert not self.serial_out_path
             self.check_log_message("Running Firecracker")
 
     @retry(wait=wait_fixed(0.2), stop=stop_after_attempt(5), reraise=True)

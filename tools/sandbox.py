@@ -18,7 +18,7 @@ from framework.defs import DEFAULT_BINARY_DIR
 from framework.microvm import MicroVMFactory
 
 kernels = list(kernels("vmlinux-*"))
-rootfs = list(disks("ubuntu*ext4"))
+rootfs = list(disks("*ext4"))
 
 
 def parse_byte_size(param):
@@ -79,7 +79,8 @@ uvm.help.resize_disk(uvm.rootfs_file, args.rootfs_size)
 uvm.spawn(log_show_level=True)
 uvm.help.print_log()
 uvm.add_net_iface()
-uvm.basic_config(vcpu_count=args.vcpus, mem_size_mib=args.guest_mem_size // 2**20)
+uvm.api.vsock.put(vsock_id="vsock0", guest_cid=3, uds_path="v.sock")
+uvm.basic_config(vcpu_count=args.vcpus, mem_size_mib=args.guest_mem_size // 2**20, boot_args="console=ttyS0 reboot=k panic=1 pci=off fips=1")
 if cpu_template is not None:
     uvm.api.cpu_config.put(**cpu_template)
     print(cpu_template)

@@ -47,7 +47,7 @@ class JailerContext:
         gid=1234,
         chroot_base=DEFAULT_CHROOT_PATH,
         netns=None,
-        daemonize=True,
+        daemonize=False,
         new_pid_ns=False,
         cgroups=None,
         resource_limits=None,
