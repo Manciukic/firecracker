@@ -721,6 +721,9 @@ impl RuntimeApiController {
 
     /// Pauses the microVM by pausing the vCPUs.
     pub fn pause(&mut self) -> Result<VmmData, VmmActionError> {
+        // Add 5-second delay before pausing VM
+        std::thread::sleep(std::time::Duration::from_secs(5));
+
         let pause_start_us = get_time_us(ClockType::Monotonic);
 
         self.vmm.lock().expect("Poisoned lock").pause_vm()?;
