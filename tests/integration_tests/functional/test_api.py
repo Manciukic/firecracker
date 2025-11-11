@@ -75,6 +75,69 @@ def test_drive_io_engine(uvm_plain, io_engine):
     )
 
 
+@pytest.mark.parametrize("use_direct_io", [True, False])
+def test_drive_use_direct_io(uvm_plain, use_direct_io):
+    """
+    Test use_direct_io configuration.
+
+    Test that the use_direct_io parameter can be configured via the API
+    and that the configuration is properly reflected in the VM config.
+    Also verifies that O_DIRECT flag is actually set on the file descriptor.
+    """
+    test_microvm = uvm_plain
+    test_microvm.spawn()
+
+    test_microvm.basic_config(add_root_device=False)
+    test_microvm.add_net_iface()
+
+    kwargs = {
+        "drive_id": "rootfs",
+        "path_on_host": test_microvm.create_jailed_resource(test_microvm.rootfs_file),
+        "is_root_device": True,
+        "is_read_only": True,
+        "use_direct_io": use_direct_io,
+    }
+
+    test_microvm.api.drive.put(**kwargs)
+
+    test_microvm.start()
+
+    # Verify the configuration is correctly stored and returned
+    drives_config = test_microvm.api.vm_config.get().json()["drives"]
+    assert len(drives_config) == 1
+    assert drives_config[0]["use_direct_io"] == use_direct_io
+
+    # Verify it's opened with O_DIRECT
+    # Find the file descriptor for the rootfs file
+    fd = None
+    # List all fds and find the one pointing to our rootfs
+    fd_dir = Path("/proc", str(test_microvm.firecracker_pid), "fd")
+    for fd_path in fd_dir.iterdir():
+        link_target = fd_path.readlink()
+        if test_microvm.rootfs_file.name == link_target.name:
+            fd = fd_path.name
+            break
+    else:
+        assert False, "couldn't find rootfs FD"
+
+    # Found the fd, now check its flags
+    fdinfo_path = Path("/proc", str(test_microvm.firecracker_pid), "fdinfo", fd)
+    fdinfo_content = fdinfo_path.read_text("utf-8")
+    # Extract flags field (in octal)
+    for line in fdinfo_content.split("\n"):
+        if line.startswith("flags:"):
+            flags_str = line.split(":")[1].strip()
+            flags = int(flags_str, 8)  # Parse as octal
+            has_o_direct = (flags & os.O_DIRECT) != 0
+
+            assert (
+                has_o_direct == use_direct_io
+            ), "File wasn't opened with the same O_DIRECT config as requested"
+            break
+    else:
+        assert False, "Couldn't verify O_DIRECT was set"
+
+
 def test_api_put_update_pre_boot(uvm_plain, io_engine):
     """
     Test that PUT updates are allowed before the microvm boots.

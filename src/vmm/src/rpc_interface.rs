@@ -1231,6 +1231,7 @@ mod tests {
                 path_on_host: Some(String::new()),
                 rate_limiter: None,
                 file_engine_type: None,
+                use_direct_io: false,
 
                 socket: None,
             },

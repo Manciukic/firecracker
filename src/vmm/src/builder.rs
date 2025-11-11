@@ -796,6 +796,7 @@ pub(crate) mod tests {
                 ),
                 rate_limiter: None,
                 file_engine_type: None,
+                use_direct_io: false,
 
                 socket: None,
             };

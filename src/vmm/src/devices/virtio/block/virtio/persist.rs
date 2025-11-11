@@ -61,6 +61,8 @@ pub struct VirtioBlockState {
     pub virtio_state: VirtioDeviceState,
     rate_limiter_state: RateLimiterState,
     file_engine_type: FileEngineTypeState,
+    #[serde(default)]
+    use_direct_io: bool,
 }
 
 impl Persist<'_> for VirtioBlock {
@@ -79,6 +81,7 @@ impl Persist<'_> for VirtioBlock {
             virtio_state: VirtioDeviceState::from_device(self),
             rate_limiter_state: self.rate_limiter.save(),
             file_engine_type: FileEngineTypeState::from(self.file_engine_type()),
+            use_direct_io: self.use_direct_io,
         }
     }
 
@@ -94,6 +97,7 @@ impl Persist<'_> for VirtioBlock {
             state.disk_path.clone(),
             is_read_only,
             state.file_engine_type.into(),
+            state.use_direct_io,
         )?;
 
         let queue_evts = [EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?];
@@ -130,6 +134,7 @@ impl Persist<'_> for VirtioBlock {
             cache_type: state.cache_type,
             root_device: state.root_device,
             read_only: is_read_only,
+            use_direct_io: state.use_direct_io,
 
             disk: disk_properties,
             rate_limiter,
@@ -164,6 +169,7 @@ mod tests {
             cache_type: CacheType::Writeback,
             rate_limiter: None,
             file_engine_type: FileEngineType::default(),
+            use_direct_io: false,
         };
 
         let block = VirtioBlock::new(config).unwrap();
@@ -208,6 +214,7 @@ mod tests {
             cache_type: CacheType::Unsafe,
             rate_limiter: None,
             file_engine_type: FileEngineType::default(),
+            use_direct_io: false,
         };
 
         let block = VirtioBlock::new(config).unwrap();
