@@ -66,6 +66,12 @@ pub const MSR_IA32_ARCH_CAPABILITIES: u32 = 0x0000_010a;
 
 const MSR_IA32_PRED_CMD: u32 = 0x0000_0049;
 
+// MTRR constants
+/// IA32_MTRR_DEF_TYPE MSR: E (MTRRs enabled) flag, bit 11
+const MTRR_ENABLE: u64 = 0x800;
+/// IA32_MTRR_DEF_TYPE MSR: Default Memory Type flag, bits 2-0
+const MTRR_MEM_TYPE_WB: u64 = 0x6;
+
 bitflags! {
     /// Feature flags enumerated in the IA32_ARCH_CAPABILITIES MSR.
     /// See https://www.intel.com/content/www/us/en/developer/articles/technical/software-security-guidance/technical-documentation/cpuid-enumeration-and-architectural-msrs.html
@@ -417,6 +423,11 @@ pub fn create_boot_msr_entries() -> Vec<kvm_msr_entry> {
         kvm_msr_entry {
             index: MSR_IA32_MISC_ENABLE,
             data: u64::from(MSR_IA32_MISC_ENABLE_FAST_STRING),
+            ..Default::default()
+        },
+        kvm_msr_entry {
+            index: MSR_MTRRdefType,
+            data: MTRR_ENABLE | MTRR_MEM_TYPE_WB,
             ..Default::default()
         },
     ]
