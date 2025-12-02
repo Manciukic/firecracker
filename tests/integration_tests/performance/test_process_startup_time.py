@@ -5,39 +5,43 @@
 import os
 import time
 
+import pytest
 from host_tools.cargo_build import run_seccompiler_bin
 
+ITERATIONS = 100
 
+
+@pytest.mark.nonci
 def test_startup_time_new_pid_ns(
     microvm_factory, guest_kernel_linux_5_10, rootfs, metrics
 ):
     """
     Check startup time when jailer is spawned in a new PID namespace.
     """
-    for _ in range(10):
+    for _ in range(ITERATIONS):
         microvm = microvm_factory.build(guest_kernel_linux_5_10, rootfs)
         microvm.jailer.new_pid_ns = True
         _test_startup_time(microvm, metrics, "new_pid_ns")
 
-
+@pytest.mark.nonci
 def test_startup_time_daemonize(
     microvm_factory, guest_kernel_linux_5_10, rootfs, metrics
 ):
     """
     Check startup time when jailer detaches Firecracker from the controlling terminal.
     """
-    for _ in range(10):
+    for _ in range(ITERATIONS):
         microvm = microvm_factory.build(guest_kernel_linux_5_10, rootfs)
         _test_startup_time(microvm, metrics, "daemonize")
 
-
+@pytest.mark.nonci
 def test_startup_time_custom_seccomp(
     microvm_factory, guest_kernel_linux_5_10, rootfs, metrics
 ):
     """
     Check the startup time when using custom seccomp filters.
     """
-    for _ in range(10):
+    for _ in range(ITERATIONS):
         microvm = microvm_factory.build(guest_kernel_linux_5_10, rootfs)
         _custom_filter_setup(microvm)
         _test_startup_time(microvm, metrics, "custom_seccomp")
@@ -51,9 +55,8 @@ def _test_startup_time(microvm, metrics, test_suffix: str):
     )
     test_start_time = time.time()
     microvm.start()
-    time.sleep(0.4)
 
-    # The metrics should be at index 1.
+    # The metrics should be at index 0.
     # Since metrics are flushed at InstanceStart, the first line will suffice.
     datapoints = microvm.get_all_metrics()
     test_end_time = time.time()
@@ -68,14 +71,15 @@ def _test_startup_time(microvm, metrics, test_suffix: str):
     )
 
     assert cpu_startup_time_us > 0
-    # Check that startup time is not a huge value
+    # Check that startup time is not a huge value (overflow)
     # This is to catch issues like the ones introduced in PR
     # https://github.com/firecracker-microvm/firecracker/pull/4305
     test_time_delta_us = (test_end_time - test_start_time) * 1000 * 1000
     assert startup_time_us < test_time_delta_us
     assert cpu_startup_time_us < test_time_delta_us
 
-    metrics.put_metric("startup_time", cpu_startup_time_us, unit="Microseconds")
+    metrics.put_metric("startup_cpu_time", cpu_startup_time_us, unit="Microseconds")
+    metrics.put_metric("startup_time", startup_time_us, unit="Microseconds")
 
 
 def _custom_filter_setup(test_microvm):
