@@ -1536,7 +1536,14 @@ impl VfioPciDevice {
 
         for region in self.common.mmio_regions.iter_mut() {
             let region_flags = self.device.get_region_flags(region.index);
-            if region_flags & VFIO_REGION_INFO_FLAG_MMAP != 0 {
+             // Retrieve the list of capabilities found on the region
+            let caps = if region_flags & VFIO_REGION_INFO_FLAG_CAPS != 0 {
+                self.device.get_region_caps(region.index)
+            } else {
+                Vec::new()
+            };
+            let sparse_mmap = caps.iter().any(|cap| matches!(cap, VfioRegionInfoCap::SparseMmap(_)));
+            if region_flags & VFIO_REGION_INFO_FLAG_MMAP != 0 || sparse_mmap {
                 let mut prot = 0;
                 if region_flags & VFIO_REGION_INFO_FLAG_READ != 0 {
                     prot |= libc::PROT_READ;
@@ -1545,19 +1552,13 @@ impl VfioPciDevice {
                     prot |= libc::PROT_WRITE;
                 }
 
-                // Retrieve the list of capabilities found on the region
-                let caps = if region_flags & VFIO_REGION_INFO_FLAG_CAPS != 0 {
-                    self.device.get_region_caps(region.index)
-                } else {
-                    Vec::new()
-                };
-
                 // Don't try to mmap the region if it contains MSI-X table or
                 // MSI-X PBA subregion, and if we couldn't find MSIX_MAPPABLE
                 // in the list of supported capabilities.
                 if let Some(msix) = self.common.interrupt.msix.as_ref() {
                     if (region.index == msix.cap.table_bir() || region.index == msix.cap.pba_bir())
                         && !caps.contains(&VfioRegionInfoCap::MsixMappable)
+                        && !sparse_mmap
                     {
                         continue;
                     }
