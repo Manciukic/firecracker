@@ -320,6 +320,14 @@ fn add_vfio_device(
     )
     .unwrap();
 
+    vfio_pci_device
+        .lock()
+        .expect("poisoned lock")
+        .vfio_pci_device_mut()
+        .unwrap()
+        .map_mmio_regions()
+        .map_err(StartMicrovmError::VfioPciError)?;
+
     // Register DMA mapping in IOMMU.
     for (_index, region) in vmm.guest_memory.iter().enumerate() {
         info!(
