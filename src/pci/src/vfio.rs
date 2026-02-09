@@ -1229,27 +1229,23 @@ impl VfioCommon {
         offset: u64,
         data: &[u8],
     ) -> Option<Arc<Barrier>> {
-        // When the guest wants to write to a BAR, we trap it into
-        // our local configuration space. We're not reprogramming
-        // VFIO device.
+        let reg = (reg_idx * PCI_CONFIG_REGISTER_SIZE) as u64;
+
         if (PCI_CONFIG_BAR0_INDEX..PCI_CONFIG_BAR0_INDEX + BAR_NUMS).contains(&reg_idx)
             || reg_idx == PCI_ROM_EXP_BAR_INDEX
         {
+            // When the guest wants to write to a BAR, we update our local configuration space.
             // We keep our local cache updated with the BARs.
             // We'll read it back from there when the guest is asking
             // for BARs (see read_config_register()).
             self.configuration
                 .write_config_register(reg_idx, offset, data);
-            return None;
-        }
 
-        let reg = (reg_idx * PCI_CONFIG_REGISTER_SIZE) as u64;
-
-        // If the MSI or MSI-X capabilities are accessed, we need to
-        // update our local cache accordingly.
-        // Depending on how the capabilities are modified, this could
-        // trigger a VFIO MSI or MSI-X toggle.
-        if let Some((cap_id, cap_base)) = self.interrupt.accessed(reg) {
+        } else if let Some((cap_id, cap_base)) = self.interrupt.accessed(reg) {
+            // If the MSI or MSI-X capabilities are accessed, we need to
+            // update our local cache accordingly.
+            // Depending on how the capabilities are modified, this could
+            // trigger a VFIO MSI or MSI-X toggle.
             let cap_offset: u64 = reg - cap_base + offset;
             match cap_id {
                 PciCapabilityId::MessageSignalledInterrupts => {
@@ -1280,10 +1276,7 @@ impl VfioCommon {
     }
 
     pub(crate) fn read_config_register(&mut self, reg_idx: usize) -> u32 {
-        // When reading the BARs, we trap it and return what comes
-        // from our local configuration space. We want the guest to
-        // use that and not the VFIO device BARs as it does not map
-        // with the guest address space.
+        // When reading the BARs, return the cached value
         if (PCI_CONFIG_BAR0_INDEX..PCI_CONFIG_BAR0_INDEX + BAR_NUMS).contains(&reg_idx)
             || reg_idx == PCI_ROM_EXP_BAR_INDEX
         {
