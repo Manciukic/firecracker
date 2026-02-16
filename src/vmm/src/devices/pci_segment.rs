@@ -400,8 +400,8 @@ impl Aml for PciSegment {
                     &aml::AddressSpace::new_memory(
                         aml::AddressSpaceCacheable::NotCacheable,
                         true,
-                        self.start_of_mem32_area,
-                        self.end_of_mem32_area,
+                        self.start_of_mem32_area as u32,
+                        self.end_of_mem32_area as u32,
                     )?,
                     &aml::AddressSpace::new_memory(
                         aml::AddressSpaceCacheable::NotCacheable,
@@ -428,8 +428,8 @@ impl Aml for PciSegment {
                     &aml::AddressSpace::new_memory(
                         aml::AddressSpaceCacheable::NotCacheable,
                         true,
-                        self.start_of_mem32_area,
-                        self.end_of_mem32_area,
+                        self.start_of_mem32_area as u32,
+                        self.end_of_mem32_area as u32,
                     )?,
                     &aml::AddressSpace::new_memory(
                         aml::AddressSpaceCacheable::NotCacheable,

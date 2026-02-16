@@ -100,7 +100,7 @@ pub enum ConfigurationError {
 pub const FIRST_ADDR_PAST_32BITS: u64 = 1 << 32;
 
 /// Size of MMIO gap at top of 32-bit address space.
-pub const MEM_32BIT_GAP_SIZE: u64 = mib_to_bytes(768) as u64;
+pub const MEM_32BIT_GAP_SIZE: u64 = layout::MEM_32BIT_RESERVED_SIZE;
 /// The start of the memory area reserved for MMIO devices.
 pub const MMIO_MEM_START: u64 = FIRST_ADDR_PAST_32BITS - MEM_32BIT_GAP_SIZE;
 /// The size of the memory area reserved for MMIO devices.
