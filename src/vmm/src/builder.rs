@@ -280,9 +280,10 @@ fn add_vfio_device(
         }))))
         .map_err(StartMicrovmError::VfioError)?,
     );
+    let start_time = std::time::Instant::now();
     let vfio_device = VfioDevice::new(device_path, Arc::clone(&vfio_container))
         .map_err(StartMicrovmError::VfioError)?;
-
+    debug!("Created VfioDevice in {} ms", (std::time::Instant::now() - start_time).as_millis());
     let vfio_pci_device = BusDevice::VfioPciDevice(
         VfioPciDevice::new(
             pci_device_id.to_string(),
@@ -304,9 +305,11 @@ fn add_vfio_device(
         )
         .unwrap(),
     );
+    debug!("Created VfioPciDevice in {} ms", (std::time::Instant::now() - start_time).as_millis());
 
     let vfio_pci_device = Arc::new(Mutex::new(vfio_pci_device));
 
+    let start_time = std::time::Instant::now();
     add_pci_device(
         vfio_pci_device.clone(),
         pci_segment,
@@ -319,7 +322,9 @@ fn add_vfio_device(
         pci_device_bdf.into(),
     )
     .unwrap();
+    debug!("Added vfio device to pci bus in {} ms", (std::time::Instant::now() - start_time).as_millis());
 
+    let start_time = std::time::Instant::now();
     vfio_pci_device
         .lock()
         .expect("poisoned lock")
@@ -327,7 +332,9 @@ fn add_vfio_device(
         .unwrap()
         .map_mmio_regions()
         .map_err(StartMicrovmError::VfioPciError)?;
+    debug!("Mapped mmio regions in {} ms", (std::time::Instant::now() - start_time).as_millis());
 
+    let start_time = std::time::Instant::now();
     // Register DMA mapping in IOMMU.
     for (_index, region) in vmm.guest_memory.iter().enumerate() {
         info!(
@@ -350,6 +357,7 @@ fn add_vfio_device(
             )
             .map_err(StartMicrovmError::VfioPciError)?;
     }
+    debug!("Mapped DMA memory in {} ms", (std::time::Instant::now() - start_time).as_millis());
     Ok(())
 }
 
@@ -638,7 +646,13 @@ pub fn build_microvm_for_boot(
         .map(|x| x.vfio_devices.as_ref())
         .flatten()
     {
+        debug!("Creating passthrough device");
+        let start_time = std::time::Instant::now();
         let device_fd = create_passthrough_device(vmm.vm.fd());
+        debug!(
+            "Passthrough device created in {} ms",
+            (std::time::Instant::now() - start_time).as_millis()
+        );
         let memory_slot = Arc::new(move || {
             // TODO use allocator for memory slots
             static mut CURRENT: u32 = 1;
@@ -648,12 +662,16 @@ pub fn build_microvm_for_boot(
             }
         });
         for vfio_device in vfio_devices {
+            debug!("Adding device {:?}", vfio_device.path);
+            let start_time = std::time::Instant::now();
             add_vfio_device(
                 &mut vmm,
                 &device_fd,
                 Path::new(&vfio_device.path),
                 memory_slot.clone(),
             )?;
+            debug!("Added device {:?} in {} ms", vfio_device.path, (std::time::Instant::now() - start_time).as_millis());
+
         }
     }
 

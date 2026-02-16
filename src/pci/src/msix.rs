@@ -231,7 +231,7 @@ impl MsixConfig {
                     }
                 };
 
-                debug!("MSI_R TABLE offset 0x{:x} data 0x{:x}", offset, value);
+                trace!("MSI_R TABLE offset 0x{:x} data 0x{:x}", offset, value);
                 LittleEndian::write_u32(data, value);
             }
             8 => {
@@ -250,7 +250,7 @@ impl MsixConfig {
                     }
                 };
 
-                debug!("MSI_R TABLE offset 0x{:x} data 0x{:x}", offset, value);
+                trace!("MSI_R TABLE offset 0x{:x} data 0x{:x}", offset, value);
                 LittleEndian::write_u64(data, value);
             }
             _ => {
@@ -286,7 +286,7 @@ impl MsixConfig {
                     _ => error!("invalid offset"),
                 };
 
-                debug!("MSI_W TABLE offset 0x{:x} data 0x{:x}", offset, value);
+                trace!("MSI_W TABLE offset 0x{:x} data 0x{:x}", offset, value);
             }
             8 => {
                 let value = LittleEndian::read_u64(data);
@@ -302,7 +302,7 @@ impl MsixConfig {
                     _ => error!("invalid offset"),
                 };
 
-                debug!("MSI_W TABLE offset 0x{:x} data 0x{:x}", offset, value);
+                trace!("MSI_W TABLE offset 0x{:x} data 0x{:x}", offset, value);
             }
             _ => error!("invalid data length"),
         };
@@ -319,6 +319,7 @@ impl MsixConfig {
         // this is safe because if the entry is masked (starts masked as per spec)
         // in the table then it won't be triggered. (See: #4273)
         if self.enabled && !self.masked && !table_entry.masked() {
+            debug!("MSI-X update vec[{}]: addr=0x{:08x}{:08x} data=0x{:08x}", index, table_entry.msg_addr_hi, table_entry.msg_addr_lo, table_entry.msg_data);
             let config = MsiIrqSourceConfig {
                 high_addr: table_entry.msg_addr_hi,
                 low_addr: table_entry.msg_addr_lo,
@@ -378,7 +379,7 @@ impl MsixConfig {
                     }
                 };
 
-                debug!("MSI_R PBA offset 0x{:x} data 0x{:x}", offset, value);
+                trace!("MSI_R PBA offset 0x{:x} data 0x{:x}", offset, value);
                 LittleEndian::write_u32(data, value);
             }
             8 => {
@@ -390,7 +391,7 @@ impl MsixConfig {
                     }
                 };
 
-                debug!("MSI_R PBA offset 0x{:x} data 0x{:x}", offset, value);
+                trace!("MSI_R PBA offset 0x{:x} data 0x{:x}", offset, value);
                 LittleEndian::write_u64(data, value);
             }
             _ => {

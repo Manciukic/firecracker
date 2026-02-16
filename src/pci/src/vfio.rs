@@ -1205,10 +1205,13 @@ impl VfioCommon {
 
             // If the MSI-X table is written to, we need to update our cache.
             if self.interrupt.msix_table_accessed(region.index, offset) {
+                debug!("MSI-X table write: bar={} offset=0x{:x} len={}", region.index, offset, data.len());
                 self.interrupt.msix_write_table(offset, data);
             } else {
                 self.vfio_wrapper.region_write(region.index, offset, data);
             }
+        } else {
+            warn!("write_bar: no region for addr=0x{:x} (base=0x{:x} offset=0x{:x})", addr, base, offset);
         }
 
         // INTx EOI
@@ -1567,6 +1570,13 @@ impl VfioPciDevice {
                     mmap_size,
                     self.common.interrupt.msix.as_ref(),
                 )?;
+
+                for (i, area) in sparse_areas.iter().enumerate() {
+                    debug!(
+                        "BAR {} mmap area[{}]: offset=0x{:x} size=0x{:x} guest=0x{:x}",
+                        region.index, i, area.offset, area.size, region.start.0 + area.offset
+                    );
+                }
 
                 for area in sparse_areas.iter() {
                     // SAFETY: FFI call with correct arguments
