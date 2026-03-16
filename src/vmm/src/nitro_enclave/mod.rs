@@ -19,9 +19,9 @@ use std::os::unix::io::FromRawFd;
 use event_manager::{EventOps, Events, MutEventSubscriber};
 use vmm_sys_util::epoll::EventSet;
 
-use crate::{FcExitCode, VmmShutdown};
 use crate::logger::{error, info};
 use crate::vmm_config::instance_info::{InstanceInfo, VmState};
+use crate::{FcExitCode, VmmShutdown};
 
 /// The top-level enclave VMM, analogous to `Vmm` for KVM-based microVMs.
 ///
@@ -31,8 +31,6 @@ pub struct EnclaveVmm {
     pub enclave_vm: enclave_vm::EnclaveVm,
     /// Assigned enclave CID.
     pub cid: u64,
-    /// Debug console (if debug mode is enabled).
-    pub console: Option<vsock_console::VsockConsole>,
     /// Whether debug mode is active.
     pub debug_mode: bool,
     /// Shutdown exit code (set when enclave exits).
@@ -57,14 +55,12 @@ impl EnclaveVmm {
     pub fn new(
         enclave_vm: enclave_vm::EnclaveVm,
         cid: u64,
-        console: Option<vsock_console::VsockConsole>,
         debug_mode: bool,
         instance_info: InstanceInfo,
     ) -> Self {
         Self {
             enclave_vm,
             cid,
-            console,
             debug_mode,
             shutdown_exit_code: None,
             instance_info,
@@ -87,12 +83,12 @@ impl MutEventSubscriber for EnclaveVmm {
     fn process(&mut self, event: Events, _: &mut EventOps) {
         let event_set = event.event_set();
 
-        // HUP means the enclave has exited
+        // HUP means the enclave has exited.
         if event_set.contains(EventSet::HANG_UP) || event_set.contains(EventSet::ERROR) {
             info!("Enclave exited (CID={})", self.cid);
             self.stop(FcExitCode::Ok);
         } else if event_set.contains(EventSet::IN) {
-            // Readable event on enclave fd - enclave may have exited
+            // Readable event on enclave fd — enclave may have exited.
             info!("Enclave fd readable event (CID={})", self.cid);
             self.stop(FcExitCode::Ok);
         }

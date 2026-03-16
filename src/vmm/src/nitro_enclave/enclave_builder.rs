@@ -114,7 +114,7 @@ pub fn build_and_boot_enclave(
     info!("Enclave started with CID={assigned_cid}");
 
     // 8. Debug mode: heartbeat + console
-    let console = if enclave_config.debug_mode {
+    if enclave_config.debug_mode {
         info!("Debug mode: checking heartbeat...");
         match heartbeat::check_heartbeat() {
             Ok(()) => info!("Heartbeat OK"),
@@ -123,17 +123,14 @@ pub fn build_and_boot_enclave(
 
         info!("Starting vsock console for CID={assigned_cid}");
         let console =
-            VsockConsole::start(assigned_cid, vm_resources.serial_out_path.as_deref())?;
-        Some(console)
-    } else {
-        None
-    };
+            VsockConsole::connect(assigned_cid, vm_resources.serial_out_path.as_deref())?;
+        event_manager.add_subscriber(Arc::new(Mutex::new(console)));
+    }
 
     // 9. Build EnclaveVmm and register with event manager
     let enclave_vmm = EnclaveVmm::new(
         enclave_vm,
         assigned_cid,
-        console,
         enclave_config.debug_mode,
         instance_info.clone(),
     );
