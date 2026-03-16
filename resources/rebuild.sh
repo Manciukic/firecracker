@@ -163,6 +163,12 @@ function build_al_kernel {
     cp -v $binary_path $OUTPUT_FILE
     cp -v .config $OUTPUT_FILE.config
 
+    # Also build bzImage for x86_64 (needed for Nitro Enclaves EIF building)
+    if [ "$arch" = "x86_64" ]; then
+        make -j $(nproc) bzImage
+        cp -v arch/x86/boot/bzImage $OUTPUT_DIR/bzImage-$normalized_version$flavour
+    fi
+
     # Undo any patches previously applied, so that we can build the same kernel with different
     # configs, e.g. no-acpi
     git reset --hard HEAD

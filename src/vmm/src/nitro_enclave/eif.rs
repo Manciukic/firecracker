@@ -40,6 +40,19 @@ const EIF_HEADER_SIZE: usize =
 /// EIF section header size: type(2) + flags(2) + size(8) = 12
 const EIF_SECTION_HEADER_SIZE: usize = 12;
 
+/// Check whether a file is an EIF by reading the first 4 bytes (magic number).
+pub fn is_eif(path: &Path) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    if (&file).take(4).read_exact(&mut magic).is_err() {
+        return false;
+    }
+    magic == EIF_MAGIC
+}
+
 /// Errors from EIF building.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum EifError {
@@ -175,6 +188,31 @@ mod tests {
             u16::from_be_bytes([eif[EIF_HEADER_SIZE], eif[EIF_HEADER_SIZE + 1]]),
             EIF_SECTION_KERNEL
         );
+    }
+
+    #[test]
+    fn test_is_eif() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // A file starting with EIF magic should be detected
+        let eif_path = dir.path().join("test.eif");
+        let mut data = EIF_MAGIC.to_vec();
+        data.extend_from_slice(&[0u8; 100]);
+        fs::write(&eif_path, &data).unwrap();
+        assert!(is_eif(&eif_path));
+
+        // A raw kernel (not EIF) should not be detected
+        let kernel_path = dir.path().join("vmlinux");
+        fs::write(&kernel_path, b"\x7fELF_fake_kernel").unwrap();
+        assert!(!is_eif(&kernel_path));
+
+        // Non-existent file should return false
+        assert!(!is_eif(dir.path().join("nonexistent").as_path()));
+
+        // Empty file should return false
+        let empty_path = dir.path().join("empty");
+        fs::write(&empty_path, b"").unwrap();
+        assert!(!is_eif(&empty_path));
     }
 
     #[test]

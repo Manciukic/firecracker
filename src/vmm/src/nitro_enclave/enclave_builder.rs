@@ -3,11 +3,14 @@
 
 //! Enclave build orchestrator.
 //!
-//! Loads a pre-built EIF image and boots a Nitro Enclave from `VmResources`.
+//! Loads a pre-built EIF image or builds one from kernel+initrd+boot_args,
+//! then boots a Nitro Enclave from `VmResources`.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::logger::info;
+use crate::nitro_enclave::eif;
 use crate::nitro_enclave::enclave_vcpu;
 use crate::nitro_enclave::enclave_vm::EnclaveVm;
 use crate::nitro_enclave::heartbeat;
@@ -28,6 +31,10 @@ pub enum EnclaveBuilderError {
     NoBootSource,
     /// Failed to read EIF image: {0}
     ReadEif(std::io::Error),
+    /// initrd_path is required when kernel_image_path is not a pre-built EIF
+    NoInitrd,
+    /// Failed to build EIF from kernel+initrd: {0}
+    EifBuild(#[from] eif::EifError),
     /// Enclave VM error: {0}
     EnclaveVm(#[from] crate::nitro_enclave::enclave_vm::EnclaveVmError),
     /// CPU selection error: {0}
@@ -40,28 +47,44 @@ pub enum EnclaveBuilderError {
 
 /// Build and boot a Nitro Enclave from the given VM resources and enclave config.
 ///
-/// The `kernel_image_path` in the boot source config should point to a pre-built
-/// EIF file. The EIF is loaded directly into enclave memory.
+/// If `kernel_image_path` points to a pre-built EIF file (detected by magic bytes),
+/// it is loaded directly. Otherwise, an EIF is built from `kernel_image_path` +
+/// `initrd_path` + `boot_args`.
 pub fn build_and_boot_enclave(
     instance_info: &InstanceInfo,
     vm_resources: &VmResources,
     enclave_config: &EnclaveConfig,
     event_manager: &mut EventManager,
 ) -> Result<Arc<Mutex<EnclaveVmm>>, EnclaveBuilderError> {
-    // 1. Get EIF path from boot config
+    // 1. Get boot config
     let _boot_config = vm_resources
         .boot_source
         .builder
         .as_ref()
         .ok_or(EnclaveBuilderError::NoBootSource)?;
-    let eif_path = &vm_resources.boot_source.config.kernel_image_path;
+    let kernel_path = &vm_resources.boot_source.config.kernel_image_path;
 
-    info!("Loading EIF from {eif_path}");
-
-    // 2. Read EIF
-    let eif_data =
-        std::fs::read(eif_path).map_err(EnclaveBuilderError::ReadEif)?;
-    info!("EIF loaded: {} bytes", eif_data.len());
+    // 2. Load or build EIF
+    let eif_data = if eif::is_eif(Path::new(kernel_path)) {
+        info!("Loading pre-built EIF from {kernel_path}");
+        std::fs::read(kernel_path).map_err(EnclaveBuilderError::ReadEif)?
+    } else {
+        let initrd_path = vm_resources
+            .boot_source
+            .config
+            .initrd_path
+            .as_deref()
+            .ok_or(EnclaveBuilderError::NoInitrd)?;
+        let boot_args = vm_resources
+            .boot_source
+            .config
+            .boot_args
+            .as_deref()
+            .unwrap_or("");
+        info!("Building EIF from kernel={kernel_path} initrd={initrd_path}");
+        eif::build_eif(Path::new(kernel_path), Path::new(initrd_path), boot_args)?
+    };
+    info!("EIF ready: {} bytes", eif_data.len());
 
     // 3. Create enclave VM
     let mut enclave_vm = EnclaveVm::new()?;
