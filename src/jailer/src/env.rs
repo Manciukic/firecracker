@@ -57,6 +57,11 @@ const DEV_URANDOM_MINOR: u32 = 9;
 const DEV_UFFD_PATH: &CStr = c"/dev/userfaultfd";
 const DEV_UFFD_MAJOR: u32 = 10;
 
+// Nitro Enclaves device. Also a misc character device with a dynamic minor.
+// The minor number is discovered at runtime from /proc/misc.
+const DEV_NE_PATH: &CStr = c"/dev/nitro_enclaves";
+const DEV_NE_MAJOR: u32 = 10;
+
 // Relevant folders inside the jail that we create or/and for which we change ownership.
 // We need /dev in order to be able to create /dev/kvm and /dev/net/tun device.
 // We need /run for the default location of the api socket.
@@ -131,6 +136,7 @@ pub struct Env {
     cgroup_conf: Option<CgroupConfiguration>,
     resource_limits: ResourceLimits,
     uffd_dev_minor: Option<u32>,
+    ne_dev_minor: Option<u32>,
 }
 
 impl Env {
@@ -253,6 +259,7 @@ impl Env {
         }
 
         let uffd_dev_minor = Self::get_userfaultfd_minor_dev_number().ok();
+        let ne_dev_minor = Self::get_misc_dev_minor_number("nitro_enclaves").ok();
 
         Ok(Env {
             id: id.to_owned(),
@@ -270,6 +277,7 @@ impl Env {
             cgroup_conf,
             resource_limits,
             uffd_dev_minor,
+            ne_dev_minor,
         })
     }
 
@@ -403,6 +411,11 @@ impl Env {
     }
 
     fn get_userfaultfd_minor_dev_number() -> Result<u32, UserfaultfdParseError> {
+        Self::get_misc_dev_minor_number("userfaultfd")
+    }
+
+    /// Look up the minor device number of a misc device by name in /proc/misc.
+    fn get_misc_dev_minor_number(dev_name: &str) -> Result<u32, UserfaultfdParseError> {
         let buf = read_to_string("/proc/misc")?;
 
         for line in buf.lines() {
@@ -411,7 +424,7 @@ impl Env {
                 continue;
             }
 
-            if dev[1] == "userfaultfd" {
+            if dev[1] == dev_name {
                 return Ok(dev[0].parse::<u32>()?);
             }
         }
@@ -705,6 +718,11 @@ impl Env {
         // Expose the device in the jailed environment.
         if let Some(minor) = self.uffd_dev_minor {
             self.mknod_and_own_dev(DEV_UFFD_PATH, DEV_UFFD_MAJOR, minor)?;
+        }
+
+        // If /dev/nitro_enclaves is present on the host, expose it in the jail.
+        if let Some(minor) = self.ne_dev_minor {
+            self.mknod_and_own_dev(DEV_NE_PATH, DEV_NE_MAJOR, minor)?;
         }
 
         self.jailer_cpu_time_us = get_time_us(ClockType::ProcessCpu) - self.start_time_cpu_us;
@@ -1179,6 +1197,14 @@ mod tests {
             ));
         }
 
+        if let Some(ne_dev_minor) = env.ne_dev_minor {
+            dev_infos.push((
+                mock_dev_dir.as_path().join("nitro_enclaves-test"),
+                DEV_NE_MAJOR,
+                ne_dev_minor,
+            ));
+        }
+
         for (dev, major, minor) in dev_infos {
             // Ensure the folder where we are creating the node exists
             fs::create_dir_all(dev.parent().unwrap()).unwrap();
@@ -1197,6 +1223,19 @@ mod tests {
             assert_eq!(env.uffd_dev_minor, None);
         } else {
             assert!(env.uffd_dev_minor.is_some());
+        }
+    }
+
+    #[test]
+    fn test_nitro_enclaves_dev() {
+        let mut mock_cgroups = MockCgroupFs::new().unwrap();
+        mock_cgroups.add_v1_mounts().unwrap();
+        let env = create_env(&mock_cgroups.proc_mounts_path);
+
+        if !Path::new(DEV_NE_PATH.to_str().unwrap()).exists() {
+            assert_eq!(env.ne_dev_minor, None);
+        } else {
+            assert!(env.ne_dev_minor.is_some());
         }
     }
 

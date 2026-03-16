@@ -116,6 +116,10 @@ pub mod vstate;
 /// Module with initrd.
 pub mod initrd;
 
+/// Nitro Enclaves support.
+#[cfg(feature = "nitro-enclave")]
+pub mod nitro_enclave;
+
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::io::AsRawFd;
@@ -451,6 +455,8 @@ impl Vmm {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots
             serial_config: None,
             memory_hotplug,
+            #[cfg(feature = "nitro-enclave")]
+            enclave: None,
         }
     }
 

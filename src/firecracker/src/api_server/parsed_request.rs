@@ -31,6 +31,8 @@ use super::request::vsock::parse_put_vsock;
 use crate::api_server::request::hotplug::memory::{
     parse_get_memory_hotplug, parse_patch_memory_hotplug, parse_put_memory_hotplug,
 };
+#[cfg(feature = "nitro-enclave")]
+use crate::api_server::request::enclave::parse_put_enclave;
 use crate::api_server::request::serial::parse_put_serial;
 
 #[derive(Debug)]
@@ -97,6 +99,8 @@ impl TryFrom<&Request> for ParsedRequest {
             (Method::Put, "boot-source", Some(body)) => parse_put_boot_source(body),
             (Method::Put, "cpu-config", Some(body)) => parse_put_cpu_config(body),
             (Method::Put, "drives", Some(body)) => parse_put_drive(body, path_tokens.next()),
+            #[cfg(feature = "nitro-enclave")]
+            (Method::Put, "enclave", Some(body)) => parse_put_enclave(body),
             (Method::Put, "pmem", Some(body)) => parse_put_pmem(body, path_tokens.next()),
             (Method::Put, "logger", Some(body)) => parse_put_logger(body),
             (Method::Put, "serial", Some(body)) => parse_put_serial(body),

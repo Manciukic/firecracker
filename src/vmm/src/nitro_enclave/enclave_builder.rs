@@ -1,0 +1,122 @@
+// Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Enclave build orchestrator.
+//!
+//! Loads a pre-built EIF image and boots a Nitro Enclave from `VmResources`.
+
+use std::sync::{Arc, Mutex};
+
+use crate::logger::info;
+use crate::nitro_enclave::enclave_vcpu;
+use crate::nitro_enclave::enclave_vm::EnclaveVm;
+use crate::nitro_enclave::heartbeat;
+use crate::nitro_enclave::vsock_console::VsockConsole;
+use crate::nitro_enclave::EnclaveVmm;
+use crate::resources::VmResources;
+use crate::utils::mib_to_bytes;
+use crate::vmm_config::enclave::EnclaveConfig;
+use crate::vmm_config::instance_info::InstanceInfo;
+use event_manager::SubscriberOps;
+
+use crate::EventManager;
+
+/// Errors from building and booting an enclave.
+#[derive(Debug, thiserror::Error, displaydoc::Display)]
+pub enum EnclaveBuilderError {
+    /// Boot source not configured (kernel_image_path required)
+    NoBootSource,
+    /// Failed to read EIF image: {0}
+    ReadEif(std::io::Error),
+    /// Enclave VM error: {0}
+    EnclaveVm(#[from] crate::nitro_enclave::enclave_vm::EnclaveVmError),
+    /// CPU selection error: {0}
+    CpuSelection(#[from] enclave_vcpu::CpuPoolError),
+    /// Heartbeat check failed: {0}
+    Heartbeat(#[from] heartbeat::HeartbeatError),
+    /// Console error: {0}
+    Console(#[from] crate::nitro_enclave::vsock_console::VsockConsoleError),
+}
+
+/// Build and boot a Nitro Enclave from the given VM resources and enclave config.
+///
+/// The `kernel_image_path` in the boot source config should point to a pre-built
+/// EIF file. The EIF is loaded directly into enclave memory.
+pub fn build_and_boot_enclave(
+    instance_info: &InstanceInfo,
+    vm_resources: &VmResources,
+    enclave_config: &EnclaveConfig,
+    event_manager: &mut EventManager,
+) -> Result<Arc<Mutex<EnclaveVmm>>, EnclaveBuilderError> {
+    // 1. Get EIF path from boot config
+    let _boot_config = vm_resources
+        .boot_source
+        .builder
+        .as_ref()
+        .ok_or(EnclaveBuilderError::NoBootSource)?;
+    let eif_path = &vm_resources.boot_source.config.kernel_image_path;
+
+    info!("Loading EIF from {eif_path}");
+
+    // 2. Read EIF
+    let eif_data =
+        std::fs::read(eif_path).map_err(EnclaveBuilderError::ReadEif)?;
+    info!("EIF loaded: {} bytes", eif_data.len());
+
+    // 3. Create enclave VM
+    let mut enclave_vm = EnclaveVm::new()?;
+    info!("Enclave VM created");
+
+    // 4. Add vCPUs
+    let vcpu_count = vm_resources.machine_config.vcpu_count as u32;
+    let cpu_ids = enclave_vcpu::select_cpus(enclave_config.cpu_ids.as_deref(), vcpu_count)?;
+    for &cpu_id in &cpu_ids {
+        enclave_vm.add_vcpu(cpu_id)?;
+    }
+    info!("Added {} vCPUs: {:?}", cpu_ids.len(), cpu_ids);
+
+    // 5. Allocate hugepage memory, copy EIF, then donate to NE.
+    //    The EIF must be written before NE_SET_USER_MEMORY_REGION because
+    //    that ioctl donates the pages and userspace loses access.
+    let mem_size = mib_to_bytes(vm_resources.machine_config.mem_size_mib);
+    let mmap_flags = vm_resources.machine_config.huge_pages.mmap_flags();
+    enclave_vm.load_and_add_memory(mem_size, mmap_flags, &eif_data)?;
+    info!(
+        "Allocated {} MiB, loaded EIF, and donated memory to enclave",
+        vm_resources.machine_config.mem_size_mib
+    );
+
+    // 7. Start enclave
+    let cid = enclave_config.enclave_cid.unwrap_or(0);
+    let assigned_cid = enclave_vm.start(enclave_config.debug_mode, cid)?;
+    info!("Enclave started with CID={assigned_cid}");
+
+    // 8. Debug mode: heartbeat + console
+    let console = if enclave_config.debug_mode {
+        info!("Debug mode: checking heartbeat...");
+        match heartbeat::check_heartbeat() {
+            Ok(()) => info!("Heartbeat OK"),
+            Err(e) => info!("Heartbeat check failed (non-fatal): {e}"),
+        }
+
+        info!("Starting vsock console for CID={assigned_cid}");
+        let console =
+            VsockConsole::start(assigned_cid, vm_resources.serial_out_path.as_deref())?;
+        Some(console)
+    } else {
+        None
+    };
+
+    // 9. Build EnclaveVmm and register with event manager
+    let enclave_vmm = EnclaveVmm::new(
+        enclave_vm,
+        assigned_cid,
+        console,
+        enclave_config.debug_mode,
+        instance_info.clone(),
+    );
+    let enclave_vmm = Arc::new(Mutex::new(enclave_vmm));
+    event_manager.add_subscriber(enclave_vmm.clone());
+
+    Ok(enclave_vmm)
+}

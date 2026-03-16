@@ -559,7 +559,13 @@ pub enum BuildFromJsonError {
     ParseFromJson(vmm::resources::ResourcesError),
     /// Could not Start MicroVM from one single json: {0}
     StartMicroVM(StartMicrovmError),
+    /// Could not build enclave from one single json: {0}
+    #[cfg(feature = "nitro-enclave")]
+    BuildEnclave(vmm::nitro_enclave::enclave_builder::EnclaveBuilderError),
 }
+
+/// Re-export BuiltVmm as VmmInstance for use in this crate.
+use vmm::rpc_interface::BuiltVmm as VmmInstance;
 
 // Configure and start a microVM as described by the command-line JSON.
 #[allow(clippy::too_many_arguments)]
@@ -572,12 +578,27 @@ fn build_microvm_from_json(
     pci_enabled: bool,
     mmds_size_limit: usize,
     metadata_json: Option<&str>,
-) -> Result<Arc<Mutex<vmm::Vmm>>, BuildFromJsonError> {
+) -> Result<VmmInstance, BuildFromJsonError> {
     let mut vm_resources =
         VmResources::from_json(&config_json, &instance_info, mmds_size_limit, metadata_json)
             .map_err(BuildFromJsonError::ParseFromJson)?;
     vm_resources.boot_timer = boot_timer_enabled;
     vm_resources.pci_enabled = pci_enabled;
+
+    #[cfg(feature = "nitro-enclave")]
+    if let Some(ref enclave_config) = vm_resources.enclave {
+        let enclave_vmm = vmm::nitro_enclave::enclave_builder::build_and_boot_enclave(
+            &instance_info,
+            &vm_resources,
+            enclave_config,
+            event_manager,
+        )
+        .map_err(BuildFromJsonError::BuildEnclave)?;
+
+        info!("Successfully started enclave that was configured from one single json");
+        return Ok(VmmInstance::Enclave(enclave_vmm));
+    }
+
     let vmm = vmm::builder::build_and_boot_microvm(
         &instance_info,
         &vm_resources,
@@ -588,7 +609,7 @@ fn build_microvm_from_json(
 
     info!("Successfully started microvm that was configured from one single json");
 
-    Ok(vmm)
+    Ok(VmmInstance::MicroVm(vmm))
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -615,7 +636,7 @@ fn run_without_api(
     event_manager.add_subscriber(firecracker_metrics.clone());
 
     // Build the microVm. We can ignore VmResources since it's not used without api.
-    let vmm = build_microvm_from_json(
+    let vmm_instance = build_microvm_from_json(
         seccomp_filters,
         &mut event_manager,
         // Safe to unwrap since '--no-api' requires this to be set.
@@ -640,7 +661,15 @@ fn run_without_api(
             .run()
             .expect("Failed to start the event manager");
 
-        match vmm.lock().unwrap().shutdown_exit_code() {
+        let shutdown_exit_code = match &vmm_instance {
+            VmmInstance::MicroVm(vmm) => vmm.lock().unwrap().shutdown_exit_code(),
+            #[cfg(feature = "nitro-enclave")]
+            VmmInstance::Enclave(enclave_vmm) => {
+                enclave_vmm.lock().unwrap().shutdown_exit_code()
+            }
+        };
+
+        match shutdown_exit_code {
             Some(FcExitCode::Ok) => break,
             Some(exit_code) => return Err(RunWithoutApiError::Shutdown(exit_code)),
             None => continue,

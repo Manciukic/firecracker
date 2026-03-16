@@ -18,6 +18,7 @@ bench = false
 [features]
 tracing = ["log-instrument", "utils/tracing", "vmm/tracing"]
 gdb = ["vmm/gdb"]
+nitro-enclave = ["vmm/nitro-enclave"]
 
 [dependencies]
 displaydoc = "0.2.5"

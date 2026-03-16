@@ -324,6 +324,48 @@
                 ]
             },
             {
+                "syscall": "socket",
+                "comment": "Nitro Enclaves: AF_VSOCK socket for heartbeat and console",
+                "args": [
+                    {
+                        "index": 0,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 40,
+                        "comment": "libc::AF_VSOCK"
+                    },
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 1,
+                        "comment": "libc::SOCK_STREAM"
+                    },
+                    {
+                        "index": 2,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 0
+                    }
+                ]
+            },
+            {
+                "syscall": "bind",
+                "comment": "Nitro Enclaves: bind vsock listener for heartbeat"
+            },
+            {
+                "syscall": "listen",
+                "comment": "Nitro Enclaves: listen on vsock for heartbeat"
+            },
+            {
+                "syscall": "accept",
+                "comment": "Nitro Enclaves: accept vsock connection for heartbeat"
+            },
+            {
+                "syscall": "setsockopt",
+                "comment": "Nitro Enclaves: set socket timeout for heartbeat"
+            },
+            {
                 "syscall": "sendto",
                 "comment": "Rust std uses it to write to unix socket"
             },
@@ -462,6 +504,71 @@
                         "op": "eq",
                         "val": 1075883590,
                         "comment": "KVM_SET_USER_MEMORY_REGION, used to (un)plug memory for the virtio-mem device"
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "Nitro Enclaves: create enclave VM",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 2148052512,
+                        "comment": "NE_CREATE_VM"
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "Nitro Enclaves: add vCPU to enclave",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 3221532193,
+                        "comment": "NE_ADD_VCPU"
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "Nitro Enclaves: get image load offset",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 3222318626,
+                        "comment": "NE_GET_IMAGE_LOAD_INFO"
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "Nitro Enclaves: set user memory region",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 1075359267,
+                        "comment": "NE_SET_USER_MEMORY_REGION"
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "Nitro Enclaves: start enclave",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 3222318628,
+                        "comment": "NE_START_ENCLAVE"
                     }
                 ]
             },

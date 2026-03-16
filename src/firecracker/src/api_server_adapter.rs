@@ -10,7 +10,7 @@ use std::thread;
 use event_manager::{EventOps, Events, MutEventSubscriber, SubscriberOps};
 use vmm::logger::{ProcessTimeReporter, error, info, warn};
 use vmm::rpc_interface::{
-    ApiRequest, ApiResponse, BuildMicrovmFromRequestsError, PrebootApiController,
+    ApiRequest, ApiResponse, BuildMicrovmFromRequestsError, BuiltVmm, PrebootApiController,
     RuntimeApiController, VmmAction,
 };
 use vmm::seccomp::BpfThreadMap;
@@ -231,12 +231,32 @@ pub(crate) fn run_with_api(
         .map_err(ApiServerError::BuildMicroVmError),
     };
 
-    let result = build_result.and_then(|vmm| {
+    let result = build_result.and_then(|vmm_instance| {
         firecracker_metrics
             .lock()
             .expect("Poisoned lock")
             .start(super::metrics::WRITE_METRICS_PERIOD_MS);
 
+        let vmm = match vmm_instance {
+            BuiltVmm::MicroVm(vmm) => vmm,
+            #[cfg(feature = "nitro-enclave")]
+            BuiltVmm::Enclave(enclave_vmm) => {
+                // Run enclave event loop without API support
+                loop {
+                    event_manager
+                        .run()
+                        .expect("EventManager events driver fatal error");
+
+                    match enclave_vmm.lock().unwrap().shutdown_exit_code() {
+                        Some(FcExitCode::Ok) => return Ok(()),
+                        Some(exit_code) => {
+                            return Err(ApiServerError::MicroVMStoppedWithError(exit_code))
+                        }
+                        None => continue,
+                    }
+                }
+            }
+        };
         ApiServerAdapter::run_microvm(api_event_fd, from_api, to_api, vmm, &mut event_manager)
     });
 
