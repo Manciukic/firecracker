@@ -1,23 +1,25 @@
 // Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Heartbeat check for Nitro Enclaves.
+//! Heartbeat device for Nitro Enclaves.
 //!
-//! Listens on a vsock port for a heartbeat byte from the enclave to validate
-//! that the enclave has booted successfully.
+//! Listens on vsock port 9000 for a heartbeat byte (0xB7) from the enclave,
+//! echoes it back, then closes the connection. Runs asynchronously on the
+//! main event loop as a `MutEventSubscriber`.
 
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
-use std::time::Duration;
+
+use event_manager::{EventOps, Events, MutEventSubscriber};
+use vmm_sys_util::epoll::EventSet;
+
+use crate::logger::{error, info};
 
 /// Port used for heartbeat communication.
 const HEARTBEAT_PORT: u32 = 9000;
 
 /// Expected heartbeat byte.
 const HEARTBEAT_BYTE: u8 = 0xB7;
-
-/// Timeout for heartbeat check.
-const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Errors from heartbeat operations.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -28,86 +30,169 @@ pub enum HeartbeatError {
     Bind(io::Error),
     /// Failed to listen on vsock: {0}
     Listen(io::Error),
-    /// Failed to accept vsock connection: {0}
-    Accept(io::Error),
-    /// Heartbeat timeout: no connection within {0:?}
-    Timeout(Duration),
-    /// Failed to read heartbeat: {0}
-    Read(io::Error),
-    /// Unexpected heartbeat byte: expected 0x{expected:02X}, got 0x{actual:02X}
-    UnexpectedByte {
-        /// Expected byte value.
-        expected: u8,
-        /// Actual byte received.
-        actual: u8,
-    },
-    /// Failed to echo heartbeat: {0}
-    Write(io::Error),
 }
 
-/// Perform a one-shot heartbeat check.
+/// Async heartbeat device driven by the event manager.
 ///
-/// Binds to port 9000 on VMADDR_CID_ANY, accepts a connection from the
-/// enclave, reads the heartbeat byte, echoes it back, and returns.
-pub fn check_heartbeat() -> Result<(), HeartbeatError> {
-    let listen_fd = create_vsock_listener()?;
+/// States: Listening (accept) → Connected (read+echo) → Done (removed from epoll).
+pub struct Heartbeat {
+    /// Listening socket fd.
+    listen_fd: OwnedFd,
+    /// Connected client fd (set after accept).
+    conn_fd: Option<OwnedFd>,
+}
 
-    // Set a receive timeout for the accept
-    let tv = libc::timeval {
-        #[allow(deprecated)]
-        tv_sec: HEARTBEAT_TIMEOUT.as_secs() as libc::time_t,
-        tv_usec: 0,
-    };
-    // SAFETY: Setting socket option with valid parameters.
-    let ret = unsafe {
-        libc::setsockopt(
-            listen_fd.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_RCVTIMEO,
-            &tv as *const libc::timeval as *const libc::c_void,
-            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
-        )
-    };
-    if ret < 0 {
-        // Non-fatal, we just won't have a timeout
+impl std::fmt::Debug for Heartbeat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Heartbeat")
+            .field("listen_fd", &self.listen_fd.as_raw_fd())
+            .field("conn_fd", &self.conn_fd.as_ref().map(|fd| fd.as_raw_fd()))
+            .finish()
     }
+}
 
-    // Accept one connection
-    // SAFETY: accept on a valid listening socket.
-    let conn_fd = unsafe { libc::accept(listen_fd.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut()) };
-    if conn_fd < 0 {
-        let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::WouldBlock || err.kind() == io::ErrorKind::TimedOut {
-            return Err(HeartbeatError::Timeout(HEARTBEAT_TIMEOUT));
+impl Heartbeat {
+    /// Create a new heartbeat listener bound to vsock port 9000.
+    ///
+    /// The listening socket is set to non-blocking so accept can be driven
+    /// by epoll.
+    pub fn new() -> Result<Self, HeartbeatError> {
+        let listen_fd = create_vsock_listener()?;
+
+        // Set non-blocking for epoll-driven accept.
+        // SAFETY: valid fd from successful bind+listen.
+        unsafe {
+            libc::fcntl(listen_fd.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
         }
-        return Err(HeartbeatError::Accept(err));
-    }
-    // SAFETY: conn_fd is valid from a successful accept().
-    let conn = unsafe { OwnedFd::from_raw_fd(conn_fd) };
 
-    // Read heartbeat byte
-    let mut buf = [0u8; 1];
-    // SAFETY: Reading from a valid connected socket.
-    let n = unsafe { libc::read(conn.as_raw_fd(), buf.as_mut_ptr().cast(), 1) };
-    if n <= 0 {
-        return Err(HeartbeatError::Read(io::Error::last_os_error()));
+        Ok(Self {
+            listen_fd,
+            conn_fd: None,
+        })
     }
 
-    if buf[0] != HEARTBEAT_BYTE {
-        return Err(HeartbeatError::UnexpectedByte {
-            expected: HEARTBEAT_BYTE,
-            actual: buf[0],
-        });
+    /// Try to accept a connection. Returns true if a connection was accepted.
+    fn try_accept(&mut self) -> bool {
+        // SAFETY: accept on a valid listening socket.
+        let fd = unsafe {
+            libc::accept(
+                self.listen_fd.as_raw_fd(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if fd < 0 {
+            return false;
+        }
+        // Set the connection non-blocking too.
+        // SAFETY: valid fd from successful accept.
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
+        }
+        // SAFETY: fd is valid from a successful accept().
+        self.conn_fd = Some(unsafe { OwnedFd::from_raw_fd(fd) });
+        true
     }
 
-    // Echo it back
-    // SAFETY: Writing to a valid connected socket.
-    let n = unsafe { libc::write(conn.as_raw_fd(), buf.as_ptr().cast(), 1) };
-    if n <= 0 {
-        return Err(HeartbeatError::Write(io::Error::last_os_error()));
+    /// Try to read the heartbeat byte and echo it back. Returns true if done.
+    fn try_read_and_echo(&self) -> bool {
+        let conn = match self.conn_fd {
+            Some(ref fd) => fd,
+            None => return false,
+        };
+
+        let mut buf = [0u8; 1];
+        // SAFETY: Reading from a valid connected socket.
+        let n = unsafe { libc::read(conn.as_raw_fd(), buf.as_mut_ptr().cast(), 1) };
+        if n <= 0 {
+            return false;
+        }
+
+        if buf[0] != HEARTBEAT_BYTE {
+            info!(
+                "Unexpected heartbeat byte: expected 0x{:02X}, got 0x{:02X}",
+                HEARTBEAT_BYTE, buf[0]
+            );
+            return true; // Still done, just unexpected.
+        }
+
+        // Echo it back.
+        // SAFETY: Writing to a valid connected socket.
+        let n = unsafe { libc::write(conn.as_raw_fd(), buf.as_ptr().cast(), 1) };
+        if n <= 0 {
+            info!("Failed to echo heartbeat byte");
+        } else {
+            info!("Heartbeat OK");
+        }
+
+        true
     }
 
-    Ok(())
+    fn remove_fd(raw_fd: i32, ops: &mut EventOps) {
+        // SAFETY: We use the raw fd value only for EventOps removal.
+        let event_fd = unsafe { vmm_sys_util::eventfd::EventFd::from_raw_fd(raw_fd) };
+        let _ = ops.remove(Events::new(
+            &event_fd,
+            EventSet::IN | EventSet::HANG_UP | EventSet::ERROR,
+        ));
+        std::mem::forget(event_fd);
+    }
+}
+
+impl MutEventSubscriber for Heartbeat {
+    fn process(&mut self, event: Events, ops: &mut EventOps) {
+        let event_set = event.event_set();
+        let source_fd = event.fd();
+
+        if source_fd == self.listen_fd.as_raw_fd() {
+            // Listening socket — try to accept.
+            if event_set.contains(EventSet::IN) && self.try_accept() {
+                // Remove listen fd, register conn fd.
+                Self::remove_fd(self.listen_fd.as_raw_fd(), ops);
+
+                let conn_raw_fd = self.conn_fd.as_ref().unwrap().as_raw_fd();
+                // SAFETY: We use the raw fd value only for EventOps registration.
+                let efd = unsafe { vmm_sys_util::eventfd::EventFd::from_raw_fd(conn_raw_fd) };
+                if let Err(err) = ops.add(Events::new(
+                    &efd,
+                    EventSet::IN | EventSet::HANG_UP | EventSet::ERROR,
+                )) {
+                    error!("Failed to register heartbeat conn fd: {}", err);
+                }
+                std::mem::forget(efd);
+            }
+        } else if let Some(conn_raw_fd) = self.conn_fd.as_ref().map(|fd| fd.as_raw_fd()) {
+            if source_fd == conn_raw_fd {
+                let done = if event_set.contains(EventSet::IN) {
+                    self.try_read_and_echo()
+                } else {
+                    false
+                };
+
+                if done
+                    || event_set.contains(EventSet::HANG_UP)
+                    || event_set.contains(EventSet::ERROR)
+                {
+                    Self::remove_fd(conn_raw_fd, ops);
+                    self.conn_fd = None;
+                }
+            }
+        }
+    }
+
+    fn init(&mut self, ops: &mut EventOps) {
+        // Register the listening socket for accept readiness.
+        // SAFETY: We use the raw fd value only for EventOps registration.
+        let event_fd =
+            unsafe { vmm_sys_util::eventfd::EventFd::from_raw_fd(self.listen_fd.as_raw_fd()) };
+        if let Err(err) = ops.add(Events::new(
+            &event_fd,
+            EventSet::IN | EventSet::HANG_UP | EventSet::ERROR,
+        )) {
+            error!("Failed to register heartbeat listen fd: {}", err);
+        }
+        std::mem::forget(event_fd);
+    }
 }
 
 /// Create and bind a vsock listener on the heartbeat port.

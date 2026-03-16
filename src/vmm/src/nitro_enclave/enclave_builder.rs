@@ -39,8 +39,6 @@ pub enum EnclaveBuilderError {
     EnclaveVm(#[from] crate::nitro_enclave::enclave_vm::EnclaveVmError),
     /// CPU selection error: {0}
     CpuSelection(#[from] enclave_vcpu::CpuPoolError),
-    /// Heartbeat check failed: {0}
-    Heartbeat(#[from] heartbeat::HeartbeatError),
     /// Console error: {0}
     Console(#[from] crate::nitro_enclave::vsock_console::VsockConsoleError),
 }
@@ -113,21 +111,25 @@ pub fn build_and_boot_enclave(
     let assigned_cid = enclave_vm.start(enclave_config.debug_mode, cid)?;
     info!("Enclave started with CID={assigned_cid}");
 
-    // 8. Debug mode: heartbeat + console
-    if enclave_config.debug_mode {
-        info!("Debug mode: checking heartbeat...");
-        match heartbeat::check_heartbeat() {
-            Ok(()) => info!("Heartbeat OK"),
-            Err(e) => info!("Heartbeat check failed (non-fatal): {e}"),
+    // 8. Heartbeat — the enclave sends 0xB7 on vsock port 9000 at boot.
+    //    Register as an async subscriber so it doesn't block startup.
+    match heartbeat::Heartbeat::new() {
+        Ok(hb) => {
+            event_manager.add_subscriber(Arc::new(Mutex::new(hb)));
+            info!("Heartbeat listener registered on vsock port 9000");
         }
+        Err(e) => info!("Heartbeat setup failed (non-fatal): {e}"),
+    }
 
+    // 9. Debug mode: vsock console
+    if enclave_config.debug_mode {
         info!("Starting vsock console for CID={assigned_cid}");
         let console =
             VsockConsole::connect(assigned_cid, vm_resources.serial_out_path.as_deref())?;
         event_manager.add_subscriber(Arc::new(Mutex::new(console)));
     }
 
-    // 9. Build EnclaveVmm and register with event manager
+    // 10. Build EnclaveVmm and register with event manager
     let enclave_vmm = EnclaveVmm::new(
         enclave_vm,
         assigned_cid,
