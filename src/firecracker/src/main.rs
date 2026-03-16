@@ -656,24 +656,7 @@ fn run_without_api(
         .start(metrics::WRITE_METRICS_PERIOD_MS);
 
     // Run the EventManager that drives everything in the microVM.
-    loop {
-        event_manager
-            .run()
-            .expect("Failed to start the event manager");
-
-        let shutdown_exit_code = match &vmm_instance {
-            VmmInstance::MicroVm(vmm) => vmm.lock().unwrap().shutdown_exit_code(),
-            #[cfg(feature = "nitro-enclave")]
-            VmmInstance::Enclave(enclave_vmm) => {
-                enclave_vmm.lock().unwrap().shutdown_exit_code()
-            }
-        };
-
-        match shutdown_exit_code {
-            Some(FcExitCode::Ok) => break,
-            Some(exit_code) => return Err(RunWithoutApiError::Shutdown(exit_code)),
-            None => continue,
-        }
-    }
-    Ok(())
+    vmm_instance
+        .run_event_loop(&mut event_manager)
+        .map_err(RunWithoutApiError::Shutdown)
 }

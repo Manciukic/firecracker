@@ -19,7 +19,7 @@ use std::os::unix::io::FromRawFd;
 use event_manager::{EventOps, Events, MutEventSubscriber};
 use vmm_sys_util::epoll::EventSet;
 
-use crate::FcExitCode;
+use crate::{FcExitCode, VmmShutdown};
 use crate::logger::{error, info};
 use crate::vmm_config::instance_info::{InstanceInfo, VmState};
 
@@ -70,14 +70,14 @@ impl EnclaveVmm {
             instance_info,
         }
     }
+}
 
-    /// Provides the shutdown exit code if there is one.
-    pub fn shutdown_exit_code(&self) -> Option<FcExitCode> {
+impl VmmShutdown for EnclaveVmm {
+    fn shutdown_exit_code(&self) -> Option<FcExitCode> {
         self.shutdown_exit_code
     }
 
-    /// Signal the enclave to stop.
-    pub fn stop(&mut self, exit_code: FcExitCode) {
+    fn stop(&mut self, exit_code: FcExitCode) {
         info!("EnclaveVmm is stopping.");
         self.shutdown_exit_code = Some(exit_code);
     }

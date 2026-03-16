@@ -29,7 +29,7 @@ use vmm::vmm_config::snapshot::{
     CreateSnapshotParams, LoadSnapshotParams, MemBackendConfig, MemBackendType, SnapshotType,
 };
 use vmm::vmm_config::vsock::VsockDeviceConfig;
-use vmm::{DumpCpuConfigError, EventManager, FcExitCode, Vmm};
+use vmm::{DumpCpuConfigError, EventManager, FcExitCode, Vmm, VmmShutdown};
 use vmm_sys_util::tempfile::TempFile;
 
 #[allow(unused_mut, unused_variables)]

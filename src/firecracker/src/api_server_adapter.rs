@@ -15,7 +15,7 @@ use vmm::rpc_interface::{
 };
 use vmm::seccomp::BpfThreadMap;
 use vmm::vmm_config::instance_info::InstanceInfo;
-use vmm::{EventManager, FcExitCode, Vmm};
+use vmm::{EventManager, FcExitCode, Vmm, VmmShutdown};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -240,21 +240,10 @@ pub(crate) fn run_with_api(
         let vmm = match vmm_instance {
             BuiltVmm::MicroVm(vmm) => vmm,
             #[cfg(feature = "nitro-enclave")]
-            BuiltVmm::Enclave(enclave_vmm) => {
+            BuiltVmm::Enclave(_) => {
                 // Run enclave event loop without API support
-                loop {
-                    event_manager
-                        .run()
-                        .expect("EventManager events driver fatal error");
-
-                    match enclave_vmm.lock().unwrap().shutdown_exit_code() {
-                        Some(FcExitCode::Ok) => return Ok(()),
-                        Some(exit_code) => {
-                            return Err(ApiServerError::MicroVMStoppedWithError(exit_code))
-                        }
-                        None => continue,
-                    }
-                }
+                return vmm_instance.run_event_loop(&mut event_manager)
+                    .map_err(ApiServerError::MicroVMStoppedWithError);
             }
         };
         ApiServerAdapter::run_microvm(api_event_fd, from_api, to_api, vmm, &mut event_manager)

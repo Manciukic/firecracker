@@ -36,7 +36,7 @@ use crate::arch::aarch64::vcpu::VcpuArchError as AarchVcpuError;
 use crate::logger::{error, info};
 use crate::utils::u64_to_usize;
 use crate::vstate::vcpu::VcpuSendEventError;
-use crate::{FcExitCode, VcpuEvent, VcpuResponse, Vmm};
+use crate::{FcExitCode, VcpuEvent, VcpuResponse, Vmm, VmmShutdown};
 
 #[derive(Debug, Default, Clone, Copy)]
 /// Stores the current state of a Vcpu with a copy of the Vcpu file descriptor

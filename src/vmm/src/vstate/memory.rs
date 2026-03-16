@@ -507,7 +507,7 @@ pub fn create(
                 track_dirty_pages.then(|| AtomicBitmap::with_len(size)),
             )
             .with_mmap_prot(libc::PROT_READ | libc::PROT_WRITE)
-            .with_mmap_flags(libc::MAP_NORESERVE | mmap_flags);
+            .with_mmap_flags(mmap_flags);
 
             if let Some(ref file) = file {
                 let file_offset = FileOffset::from_arc(Arc::clone(file), offset);
@@ -543,7 +543,7 @@ pub fn memfd_backed(
 
     create(
         regions.iter().copied(),
-        libc::MAP_SHARED | huge_pages.mmap_flags(),
+        libc::MAP_NORESERVE | libc::MAP_SHARED | huge_pages.mmap_flags(),
         Some(memfd_file),
         track_dirty_pages,
     )
@@ -557,10 +557,27 @@ pub fn anonymous(
 ) -> Result<Vec<GuestRegionMmap>, MemoryError> {
     create(
         regions,
-        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | huge_pages.mmap_flags(),
+        libc::MAP_NORESERVE | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | huge_pages.mmap_flags(),
         None,
         track_dirty_pages,
     )
+}
+
+/// Creates a single `GuestRegionMmap` suitable for Nitro Enclave use.
+///
+/// Unlike `anonymous()`, this does NOT set `MAP_NORESERVE`, ensuring
+/// hugepages are physically committed. It creates a single contiguous
+/// region at `GuestAddress(0)` with no dirty page tracking.
+#[cfg(feature = "nitro-enclave")]
+pub fn enclave_region(
+    size: usize,
+    huge_pages: HugePageConfig,
+) -> Result<GuestRegionMmap, MemoryError> {
+    let flags = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | huge_pages.mmap_flags();
+    create(std::iter::once((GuestAddress(0), size)), flags, None, false)?
+        .into_iter()
+        .next()
+        .ok_or(MemoryError::VmMemoryError)
 }
 
 /// Creates a GuestMemoryMmap given a `file` containing the data
@@ -585,7 +602,7 @@ pub fn snapshot_file(
 
     create(
         regions.into_iter(),
-        libc::MAP_PRIVATE,
+        libc::MAP_NORESERVE | libc::MAP_PRIVATE,
         Some(file),
         track_dirty_pages,
     )

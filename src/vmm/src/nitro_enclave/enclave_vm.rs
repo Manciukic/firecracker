@@ -5,69 +5,11 @@
 //!
 //! Wraps the NE kernel API to create, configure, and start an enclave.
 
+use vm_memory::{Bytes, GuestMemoryRegion, MemoryRegionAddress};
+
 use crate::nitro_enclave::ne_ioctl::{EnclaveFd, NitroEnclaveFd};
-
-/// A hugepage-backed memory region for the enclave.
-#[derive(Debug)]
-pub struct HugepageRegion {
-    addr: *mut u8,
-    size: usize,
-}
-
-// SAFETY: The pointer in HugepageRegion is from mmap and is only used by the enclave.
-unsafe impl Send for HugepageRegion {}
-
-impl HugepageRegion {
-    /// Allocate a hugepage-backed memory region.
-    ///
-    /// `mmap_flags` should include `MAP_HUGETLB | MAP_HUGE_2MB` for 2MB hugepages.
-    pub fn allocate(size: usize, mmap_flags: libc::c_int) -> std::io::Result<Self> {
-        // SAFETY: We're requesting an anonymous private mapping backed by hugepages.
-        let addr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | mmap_flags,
-                -1,
-                0,
-            )
-        };
-
-        if addr == libc::MAP_FAILED {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        Ok(Self {
-            addr: addr.cast::<u8>(),
-            size,
-        })
-    }
-
-    /// Get the base address of the region.
-    pub fn addr(&self) -> *mut u8 {
-        self.addr
-    }
-
-    /// Get the size of the region in bytes.
-    pub fn size(&self) -> usize {
-        self.size
-    }
-
-    /// Get the base address as u64 for ioctl calls.
-    pub fn addr_u64(&self) -> u64 {
-        self.addr as u64
-    }
-}
-
-impl Drop for HugepageRegion {
-    fn drop(&mut self) {
-        // SAFETY: We allocated this region with mmap and own it exclusively.
-        unsafe {
-            libc::munmap(self.addr.cast(), self.size);
-        }
-    }
-}
+use crate::vmm_config::machine_config::HugePageConfig;
+use crate::vstate::memory::{self, GuestRegionMmap, MemoryError};
 
 /// Errors from enclave VM operations.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -83,8 +25,8 @@ pub enum EnclaveVmError {
         /// Underlying error.
         source: std::io::Error,
     },
-    /// Failed to allocate hugepage memory: {0}
-    AllocateMemory(std::io::Error),
+    /// Failed to allocate enclave memory: {0}
+    AllocateMemory(MemoryError),
     /// Failed to set user memory region: {0}
     SetMemoryRegion(std::io::Error),
     /// Failed to get image load info: {0}
@@ -100,6 +42,10 @@ pub enum EnclaveVmError {
         /// Total memory allocated.
         mem_size: u64,
     },
+    /// Failed to get host address from memory region: {0}
+    GetHostAddress(vm_memory::guest_memory::Error),
+    /// Failed to write EIF into memory region: {0}
+    WriteEif(vm_memory::guest_memory::Error),
 }
 
 /// Manages the lifecycle of a Nitro Enclave VM.
@@ -107,7 +53,7 @@ pub enum EnclaveVmError {
 pub struct EnclaveVm {
     _dev_fd: NitroEnclaveFd,
     enclave_fd: EnclaveFd,
-    memory_regions: Vec<HugepageRegion>,
+    memory_regions: Vec<GuestRegionMmap>,
     vcpu_ids: Vec<u32>,
     enclave_cid: Option<u64>,
 }
@@ -148,12 +94,12 @@ impl EnclaveVm {
     pub fn load_and_add_memory(
         &mut self,
         size: usize,
-        mmap_flags: libc::c_int,
+        huge_pages: HugePageConfig,
         eif_data: &[u8],
     ) -> Result<(), EnclaveVmError> {
-        // 1. Allocate hugepage region
+        // 1. Allocate hugepage region using the standard vm-memory infrastructure
         let region =
-            HugepageRegion::allocate(size, mmap_flags).map_err(EnclaveVmError::AllocateMemory)?;
+            memory::enclave_region(size, huge_pages).map_err(EnclaveVmError::AllocateMemory)?;
 
         // 2. Get image load offset
         let info = self
@@ -162,27 +108,25 @@ impl EnclaveVm {
             .map_err(EnclaveVmError::GetImageLoadInfo)?;
         let offset = info.memory_offset as usize;
 
-        if offset + eif_data.len() > region.size() {
+        if offset as u64 + eif_data.len() as u64 > region.len() {
             return Err(EnclaveVmError::ImageTooLarge {
                 offset: offset as u64,
                 image_size: eif_data.len() as u64,
-                mem_size: region.size() as u64,
+                mem_size: region.len(),
             });
         }
 
-        // 3. Copy EIF into the hugepage region BEFORE donating
-        // SAFETY: We just allocated this region and confirmed bounds above.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                eif_data.as_ptr(),
-                region.addr().add(offset),
-                eif_data.len(),
-            );
-        }
+        // 3. Copy EIF into the region BEFORE donating
+        region
+            .write_slice(eif_data, MemoryRegionAddress(offset as u64))
+            .map_err(EnclaveVmError::WriteEif)?;
 
         // 4. Donate memory to the enclave
+        let addr = region
+            .get_host_address(MemoryRegionAddress(0))
+            .map_err(EnclaveVmError::GetHostAddress)? as u64;
         self.enclave_fd
-            .set_user_memory_region(region.addr_u64(), region.size() as u64)
+            .set_user_memory_region(addr, region.len())
             .map_err(EnclaveVmError::SetMemoryRegion)?;
 
         self.memory_regions.push(region);

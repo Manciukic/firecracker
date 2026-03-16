@@ -10,7 +10,7 @@ use utils::time::{ClockType, get_time_us};
 use super::builder::build_and_boot_microvm;
 use super::persist::{create_snapshot, restore_from_snapshot};
 use super::resources::VmResources;
-use super::{Vmm, VmmError};
+use super::{FcExitCode, Vmm, VmmError, VmmShutdown};
 use crate::EventManager;
 use crate::builder::StartMicrovmError;
 #[cfg(feature = "nitro-enclave")]
@@ -332,6 +332,37 @@ pub enum BuiltVmm {
     /// Nitro Enclave-based VM.
     #[cfg(feature = "nitro-enclave")]
     Enclave(Arc<Mutex<EnclaveVmm>>),
+}
+
+impl BuiltVmm {
+    /// Returns the shutdown exit code by delegating to the underlying VMM type.
+    pub fn shutdown_exit_code(&self) -> Option<FcExitCode> {
+        match self {
+            BuiltVmm::MicroVm(vmm) => vmm.lock().unwrap().shutdown_exit_code(),
+            #[cfg(feature = "nitro-enclave")]
+            BuiltVmm::Enclave(enclave_vmm) => enclave_vmm.lock().unwrap().shutdown_exit_code(),
+        }
+    }
+
+    /// Run the event manager loop until the VMM shuts down.
+    ///
+    /// Returns `Ok(())` on clean shutdown, or `Err(exit_code)` on error exit.
+    pub fn run_event_loop(
+        &self,
+        event_manager: &mut EventManager,
+    ) -> Result<(), FcExitCode> {
+        loop {
+            event_manager
+                .run()
+                .expect("EventManager events driver fatal error");
+
+            match self.shutdown_exit_code() {
+                Some(FcExitCode::Ok) => return Ok(()),
+                Some(exit_code) => return Err(exit_code),
+                None => continue,
+            }
+        }
+    }
 }
 
 /// Error type for `PrebootApiController::build_microvm_from_requests`.

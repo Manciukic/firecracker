@@ -102,8 +102,7 @@ pub fn build_and_boot_enclave(
     //    The EIF must be written before NE_SET_USER_MEMORY_REGION because
     //    that ioctl donates the pages and userspace loses access.
     let mem_size = mib_to_bytes(vm_resources.machine_config.mem_size_mib);
-    let mmap_flags = vm_resources.machine_config.huge_pages.mmap_flags();
-    enclave_vm.load_and_add_memory(mem_size, mmap_flags, &eif_data)?;
+    enclave_vm.load_and_add_memory(mem_size, vm_resources.machine_config.huge_pages, &eif_data)?;
     info!(
         "Allocated {} MiB, loaded EIF, and donated memory to enclave",
         vm_resources.machine_config.mem_size_mib

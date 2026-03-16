@@ -310,6 +310,17 @@ pub enum DumpCpuConfigError {
     NotAllowed(String),
 }
 
+/// Common interface shared by both the KVM-based `Vmm` and the Nitro Enclave `EnclaveVmm`.
+///
+/// This trait unifies shutdown detection so that event loops and other infrastructure
+/// code can work with either VMM type without matching on an enum.
+pub trait VmmShutdown {
+    /// Returns the shutdown exit code, if the VMM has been signalled to stop.
+    fn shutdown_exit_code(&self) -> Option<FcExitCode>;
+    /// Signals the VMM to stop with the given exit code.
+    fn stop(&mut self, exit_code: FcExitCode);
+}
+
 /// Contains the state and associated methods required for the Firecracker VMM.
 #[derive(Debug)]
 pub struct Vmm {
@@ -360,11 +371,6 @@ impl Vmm {
             });
 
         mmds
-    }
-
-    /// Provides the Vmm shutdown exit code if there is one.
-    pub fn shutdown_exit_code(&self) -> Option<FcExitCode> {
-        self.shutdown_exit_code
     }
 
     /// Builds a FullVmConfig from the current Vmm state.
@@ -780,18 +786,21 @@ impl Vmm {
         Ok(())
     }
 
-    /// Signals Vmm to stop and exit.
-    pub fn stop(&mut self, exit_code: FcExitCode) {
-        info!("Vmm is stopping.");
-
-        // Break the main event loop, propagating the Vmm exit-code.
-        self.shutdown_exit_code = Some(exit_code);
-    }
-
     /// Gets a reference to kvm-ioctls Vm
     #[cfg(feature = "gdb")]
     pub fn vm(&self) -> &Vm {
         &self.vm
+    }
+}
+
+impl VmmShutdown for Vmm {
+    fn shutdown_exit_code(&self) -> Option<FcExitCode> {
+        self.shutdown_exit_code
+    }
+
+    fn stop(&mut self, exit_code: FcExitCode) {
+        info!("Vmm is stopping.");
+        self.shutdown_exit_code = Some(exit_code);
     }
 }
 
