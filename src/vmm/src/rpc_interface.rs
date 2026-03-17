@@ -13,7 +13,6 @@ use super::resources::VmResources;
 use super::{Vmm, VmmError};
 use crate::EventManager;
 use crate::builder::StartMicrovmError;
-#[cfg(feature = "nitro-enclave")]
 use crate::vmm_config::enclave::EnclaveConfig;
 use crate::cpu_config::templates::{CustomCpuTemplate, GuestConfigError};
 use crate::devices::virtio::balloon::device::{HintingStatus, StartHintingCmd};
@@ -149,8 +148,7 @@ pub enum VmmAction {
     /// action can only be called before the microVM has booted.
     UpdateMachineConfiguration(MachineConfigUpdate),
     /// Configure enclave settings. This action can only be called before the microVM has booted.
-    #[cfg(feature = "nitro-enclave")]
-    SetEnclaveConfig(EnclaveConfig),
+        SetEnclaveConfig(EnclaveConfig),
 }
 
 /// Wrapper for all errors associated with VMM actions.
@@ -207,8 +205,7 @@ pub enum VmmActionError {
     /// Vsock config error: {0}
     VsockConfig(#[from] VsockConfigError),
     /// Enclave error: {0}
-    #[cfg(feature = "nitro-enclave")]
-    Enclave(#[from] crate::nitro_enclave::enclave_builder::EnclaveBuilderError),
+        Enclave(#[from] crate::nitro_enclave::enclave_builder::EnclaveBuilderError),
 }
 
 /// The enum represents the response sent by the VMM in case of success. The response is either
@@ -489,8 +486,7 @@ impl<'a> PrebootApiController<'a> {
             UpdateMachineConfiguration(config) => self.update_machine_config(config),
             SetEntropyDevice(config) => self.set_entropy_device(config),
             SetMemoryHotplugDevice(config) => self.set_memory_hotplug_device(config),
-            #[cfg(feature = "nitro-enclave")]
-            SetEnclaveConfig(config) => self.set_enclave_config(config),
+                        SetEnclaveConfig(config) => self.set_enclave_config(config),
             // Operations not allowed pre-boot.
             CreateSnapshot(_)
             | FlushMetrics
@@ -615,8 +611,7 @@ impl<'a> PrebootApiController<'a> {
     // On success, this command will end the pre-boot stage and this controller
     // will be replaced by a runtime controller.
     fn start_microvm(&mut self) -> Result<VmmData, VmmActionError> {
-        #[cfg(feature = "nitro-enclave")]
-        if self.vm_resources.enclave.is_some() {
+                if self.vm_resources.enclave.is_some() {
             return self.start_enclave();
         }
 
@@ -633,8 +628,7 @@ impl<'a> PrebootApiController<'a> {
         .map_err(VmmActionError::StartMicrovm)
     }
 
-    #[cfg(feature = "nitro-enclave")]
-    fn start_enclave(&mut self) -> Result<VmmData, VmmActionError> {
+        fn start_enclave(&mut self) -> Result<VmmData, VmmActionError> {
         let enclave_config = self
             .vm_resources
             .enclave
@@ -652,8 +646,7 @@ impl<'a> PrebootApiController<'a> {
         Ok(VmmData::Empty)
     }
 
-    #[cfg(feature = "nitro-enclave")]
-    fn set_enclave_config(&mut self, cfg: EnclaveConfig) -> Result<VmmData, VmmActionError> {
+        fn set_enclave_config(&mut self, cfg: EnclaveConfig) -> Result<VmmData, VmmActionError> {
         self.boot_path = true;
         self.vm_resources.enclave = Some(cfg);
         Ok(VmmData::Empty)
@@ -719,8 +712,7 @@ impl RuntimeApiController {
         use self::VmmAction::*;
 
         // For enclave VMs, reject KVM-specific operations early.
-        #[cfg(feature = "nitro-enclave")]
-        if self.is_enclave() {
+                if self.is_enclave() {
             match &request {
                 // These info queries work for both KVM and Enclave.
                 GetVmInstanceInfo | GetVmmVersion | GetVmMachineConfig | FlushMetrics => {}
@@ -869,8 +861,7 @@ impl RuntimeApiController {
             | SetMemoryHotplugDevice(_)
             | StartMicroVm
             | UpdateMachineConfiguration(_) => Err(VmmActionError::OperationNotSupportedPostBoot),
-            #[cfg(feature = "nitro-enclave")]
-            SetEnclaveConfig(_) => Err(VmmActionError::OperationNotSupportedPostBoot),
+                        SetEnclaveConfig(_) => Err(VmmActionError::OperationNotSupportedPostBoot),
         }
     }
 
@@ -880,8 +871,7 @@ impl RuntimeApiController {
     }
 
     /// Returns true if the VMM is running an enclave (not a KVM VM).
-    #[cfg(feature = "nitro-enclave")]
-    fn is_enclave(&self) -> bool {
+        fn is_enclave(&self) -> bool {
         self.vmm.lock().expect("Poisoned lock").vm.is_enclave()
     }
 

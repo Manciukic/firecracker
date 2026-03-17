@@ -568,7 +568,6 @@ pub fn anonymous(
 /// Unlike `anonymous()`, this does NOT set `MAP_NORESERVE`, ensuring
 /// hugepages are physically committed. It creates a single contiguous
 /// region at `GuestAddress(0)` with no dirty page tracking.
-#[cfg(feature = "nitro-enclave")]
 pub fn enclave_region(
     size: usize,
     huge_pages: HugePageConfig,

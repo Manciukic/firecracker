@@ -37,7 +37,6 @@ pub mod snapshot;
 pub mod vsock;
 
 /// Enclave-specific configuration for Nitro Enclaves mode.
-#[cfg(feature = "nitro-enclave")]
 pub mod enclave;
 
 // TODO: Migrate the VMM public-facing code (i.e. interface) to use stateless structures,

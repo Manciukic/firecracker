@@ -131,12 +131,6 @@ if [ "$LIBC" == "gnu" ]; then
     ARTIFACTS=(firecracker seccompiler-bin rebase-snap cpu-template-helper snapshot-editor)
 fi
 
-# Enable Nitro Enclaves support when the device is available
-if [ -c /dev/nitro_enclaves ]; then
-    say "Detected /dev/nitro_enclaves, enabling nitro-enclave feature"
-    CARGO_OPTS+=" --features nitro-enclave"
-fi
-
 say "Building version=$VERSION, profile=$PROFILE, target=$CARGO_TARGET, Rust toolchain=${RUST_TOOLCHAIN}..."
 # shellcheck disable=SC2086
 cargo build --target "$CARGO_TARGET" $CARGO_OPTS --workspace --bins --examples

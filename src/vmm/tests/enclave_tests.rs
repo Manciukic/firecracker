@@ -3,7 +3,6 @@
 
 //! Integration tests for Nitro Enclaves support.
 
-#![cfg(feature = "nitro-enclave")]
 #![allow(clippy::tests_outside_test_module)]
 
 use std::fs;

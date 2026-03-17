@@ -6,7 +6,6 @@ pub mod balloon;
 pub mod boot_source;
 pub mod cpu_configuration;
 pub mod drive;
-#[cfg(feature = "nitro-enclave")]
 pub mod enclave;
 pub mod entropy;
 pub mod hotplug;

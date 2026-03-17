@@ -117,13 +117,11 @@ pub mod vstate;
 pub mod initrd;
 
 /// Nitro Enclaves support.
-#[cfg(feature = "nitro-enclave")]
 pub mod nitro_enclave;
 
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::io::AsRawFd;
-#[cfg(feature = "nitro-enclave")]
 use std::os::unix::io::FromRawFd;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Barrier, Mutex};
@@ -350,11 +348,9 @@ pub struct Vmm {
 
     // Enclave-specific fields
     /// Assigned enclave CID (only set for enclave VMs).
-    #[cfg(feature = "nitro-enclave")]
-    pub enclave_cid: Option<u64>,
+        pub enclave_cid: Option<u64>,
     /// Whether enclave debug mode is active.
-    #[cfg(feature = "nitro-enclave")]
-    pub enclave_debug_mode: bool,
+        pub enclave_debug_mode: bool,
 }
 
 impl Vmm {
@@ -472,8 +468,7 @@ impl Vmm {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots
             serial_config: None,
             memory_hotplug,
-            #[cfg(feature = "nitro-enclave")]
-            enclave: None,
+                        enclave: None,
         }
     }
 
@@ -902,8 +897,7 @@ impl MutEventSubscriber for Vmm {
                     error!("Spurious EventManager event for handler: Vmm");
                 }
             }
-            #[cfg(feature = "nitro-enclave")]
-            Vm::Enclave(_) => {
+                        Vm::Enclave(_) => {
                 // HUP means the enclave has exited.
                 if event_set.contains(EventSet::HANG_UP) || event_set.contains(EventSet::ERROR) {
                     info!("Enclave exited (CID={:?})", self.enclave_cid);
@@ -924,8 +918,7 @@ impl MutEventSubscriber for Vmm {
                     error!("Failed to register vmm exit event: {}", err);
                 }
             }
-            #[cfg(feature = "nitro-enclave")]
-            Vm::Enclave(enclave_vm) => {
+                        Vm::Enclave(enclave_vm) => {
                 let enclave_fd = enclave_vm.enclave_raw_fd();
                 // SAFETY: We use the raw fd value only for EventOps registration.
                 let event_fd = unsafe { vmm_sys_util::eventfd::EventFd::from_raw_fd(enclave_fd) };

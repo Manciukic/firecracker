@@ -26,7 +26,6 @@ use vmm_sys_util::eventfd::EventFd;
 
 pub use crate::arch::{ArchVm, ArchVmError, VmState};
 use crate::arch::{GSI_MSI_END, host_page_size};
-#[cfg(feature = "nitro-enclave")]
 use crate::nitro_enclave::enclave_vm::EnclaveVm;
 use crate::logger::info;
 use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice};
@@ -101,14 +100,12 @@ pub enum Vm {
     /// KVM-backed virtual machine.
     Kvm(ArchVm),
     /// Nitro Enclave-backed virtual machine.
-    #[cfg(feature = "nitro-enclave")]
-    Enclave(EnclaveVm),
+        Enclave(EnclaveVm),
 }
 
 impl Vm {
     /// Returns true if this is an enclave VM.
-    #[cfg(feature = "nitro-enclave")]
-    pub fn is_enclave(&self) -> bool {
+        pub fn is_enclave(&self) -> bool {
         matches!(self, Vm::Enclave(_))
     }
 
@@ -116,8 +113,7 @@ impl Vm {
     pub fn as_kvm(&self) -> &ArchVm {
         match self {
             Vm::Kvm(v) => v,
-            #[cfg(feature = "nitro-enclave")]
-            Vm::Enclave(_) => panic!("as_kvm() called on non-KVM Vm"),
+                        Vm::Enclave(_) => panic!("as_kvm() called on non-KVM Vm"),
         }
     }
 
@@ -125,8 +121,7 @@ impl Vm {
     pub fn as_kvm_mut(&mut self) -> &mut ArchVm {
         match self {
             Vm::Kvm(v) => v,
-            #[cfg(feature = "nitro-enclave")]
-            Vm::Enclave(_) => panic!("as_kvm_mut() called on non-KVM Vm"),
+                        Vm::Enclave(_) => panic!("as_kvm_mut() called on non-KVM Vm"),
         }
     }
 

@@ -333,10 +333,8 @@ pub fn build_microvm_for_boot(
         vcpus_handles: Vec::new(),
         vcpus_exit_evt: Some(vcpus_exit_evt),
         device_manager,
-        #[cfg(feature = "nitro-enclave")]
-        enclave_cid: None,
-        #[cfg(feature = "nitro-enclave")]
-        enclave_debug_mode: false,
+                enclave_cid: None,
+                enclave_debug_mode: false,
     };
     let vmm = Arc::new(Mutex::new(vmm));
 
@@ -539,10 +537,8 @@ pub fn build_microvm_from_snapshot(
         vcpus_handles: Vec::new(),
         vcpus_exit_evt: Some(vcpus_exit_evt),
         device_manager,
-        #[cfg(feature = "nitro-enclave")]
-        enclave_cid: None,
-        #[cfg(feature = "nitro-enclave")]
-        enclave_debug_mode: false,
+                enclave_cid: None,
+                enclave_debug_mode: false,
     };
 
     let vmm = Arc::new(Mutex::new(vmm));
@@ -894,10 +890,8 @@ pub(crate) mod tests {
             vcpus_handles: Vec::new(),
             vcpus_exit_evt: Some(vcpus_exit_evt),
             device_manager: default_device_manager(),
-            #[cfg(feature = "nitro-enclave")]
-            enclave_cid: None,
-            #[cfg(feature = "nitro-enclave")]
-            enclave_debug_mode: false,
+                        enclave_cid: None,
+                        enclave_debug_mode: false,
         }
     }
 
