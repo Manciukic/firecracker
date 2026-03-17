@@ -65,6 +65,9 @@ function build_initramfs {
     cp /bin/busybox bin/sh
     ln bin/sh bin/mount
 
+    # Build heartbeat sender for Nitro Enclaves
+    gcc -static -o bin/heartbeat_sender ../heartbeat_sender.c
+
     # Report guest boot time back to Firecracker via MMIO
     # See arch/src/lib.rs and the BootTimer device
     MAGIC_BOOT_ADDRESS=0xc0000000
@@ -76,7 +79,15 @@ function build_initramfs {
 #!/bin/sh
 mount -t devtmpfs devtmpfs /dev
 mount -t proc none /proc
-devmem $MAGIC_BOOT_ADDRESS 8 $MAGIC_BOOT_VALUE
+
+# Detect enclave vs microVM: enclaves have /dev/vsock but no MMIO boot timer
+if [ -e /dev/vsock ]; then
+    # Nitro Enclave: send heartbeat to signal successful boot
+    /bin/heartbeat_sender
+else
+    devmem $MAGIC_BOOT_ADDRESS 8 $MAGIC_BOOT_VALUE
+fi
+
 mount -t sysfs none /sys
 exec 0</dev/console
 exec 1>/dev/console
