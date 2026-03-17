@@ -24,6 +24,7 @@ const EIF_HDR_VERSION: u16 = 4;
 const EIF_SECTION_KERNEL: u16 = 1;
 const EIF_SECTION_CMDLINE: u16 = 2;
 const EIF_SECTION_RAMDISK: u16 = 3;
+const EIF_SECTION_METADATA: u16 = 5;
 
 /// Default flags.
 const EIF_DEFAULT_FLAGS: u16 = 0;
@@ -88,12 +89,17 @@ pub fn build_eif(
     let initrd_data = fs::read(initrd_path).map_err(EifError::ReadInitrd)?;
     let cmdline_data = cmdline.as_bytes();
 
-    let num_sections: u16 = 3;
+    // Build minimal metadata JSON required by the NE hypervisor.
+    let metadata = build_metadata();
+    let metadata_data = metadata.as_bytes();
+
+    let num_sections: u16 = 4;
 
     // Calculate total image size
     let sections_size = (EIF_SECTION_HEADER_SIZE * num_sections as usize)
         + kernel_data.len()
         + cmdline_data.len()
+        + metadata_data.len()
         + initrd_data.len();
     let total_size = EIF_HEADER_SIZE + sections_size;
 
@@ -108,15 +114,22 @@ pub fn build_eif(
     eif.extend_from_slice(&0u16.to_be_bytes()); // reserved
     eif.extend_from_slice(&num_sections.to_be_bytes());
 
-    // Compute section offsets
+    // Compute section offsets (order: KERNEL, CMDLINE, METADATA, RAMDISK)
     let kernel_section_offset = EIF_HEADER_SIZE as u64;
     let cmdline_section_offset =
         kernel_section_offset + EIF_SECTION_HEADER_SIZE as u64 + kernel_data.len() as u64;
-    let ramdisk_section_offset =
+    let metadata_section_offset =
         cmdline_section_offset + EIF_SECTION_HEADER_SIZE as u64 + cmdline_data.len() as u64;
+    let ramdisk_section_offset =
+        metadata_section_offset + EIF_SECTION_HEADER_SIZE as u64 + metadata_data.len() as u64;
 
     // Section offsets array (32 entries, big-endian, unused slots are zero)
-    let offsets = [kernel_section_offset, cmdline_section_offset, ramdisk_section_offset];
+    let offsets = [
+        kernel_section_offset,
+        cmdline_section_offset,
+        metadata_section_offset,
+        ramdisk_section_offset,
+    ];
     for i in 0..MAX_NUM_SECTIONS {
         let val = if i < offsets.len() { offsets[i] } else { 0 };
         eif.extend_from_slice(&val.to_be_bytes());
@@ -126,6 +139,7 @@ pub fn build_eif(
     let sizes = [
         kernel_data.len() as u64,
         cmdline_data.len() as u64,
+        metadata_data.len() as u64,
         initrd_data.len() as u64,
     ];
     for i in 0..MAX_NUM_SECTIONS {
@@ -140,9 +154,10 @@ pub fn build_eif(
 
     debug_assert_eq!(eif.len(), EIF_HEADER_SIZE);
 
-    // --- Sections ---
+    // --- Sections (order: KERNEL, CMDLINE, METADATA, RAMDISK) ---
     write_section(&mut eif, EIF_SECTION_KERNEL, &kernel_data);
     write_section(&mut eif, EIF_SECTION_CMDLINE, cmdline_data);
+    write_section(&mut eif, EIF_SECTION_METADATA, metadata_data);
     write_section(&mut eif, EIF_SECTION_RAMDISK, &initrd_data);
 
     // Compute EIF CRC32 over the entire image, excluding the 4-byte CRC field itself.
@@ -153,6 +168,13 @@ pub fn build_eif(
     eif[EIF_CRC32_OFFSET..EIF_CRC32_OFFSET + 4].copy_from_slice(&crc.to_be_bytes());
 
     Ok(eif)
+}
+
+/// Build a minimal metadata JSON string required by the NE hypervisor.
+fn build_metadata() -> String {
+    format!(
+        r#"{{"ImageName":"firecracker-enclave","ImageVersion":"","BuildMetadata":{{"BuildTime":"","BuildTool":"firecracker","BuildToolVersion":"","OperatingSystem":"Linux","KernelVersion":""}},"DockerInfo":{{}},"CustomMetadata":null}}"#
+    )
 }
 
 /// Write a section (header + data) to the EIF buffer. All fields big-endian.
@@ -190,7 +212,7 @@ mod tests {
         assert_eq!(u64::from_be_bytes(eif[16..24].try_into().unwrap()), cpus);
         // Verify reserved(u16) + num_sections(u16) at offset 24
         assert_eq!(u16::from_be_bytes([eif[24], eif[25]]), 0); // reserved
-        assert_eq!(u16::from_be_bytes([eif[26], eif[27]]), 3); // num_sections
+        assert_eq!(u16::from_be_bytes([eif[26], eif[27]]), 4); // num_sections
         // Verify header size
         assert_eq!(EIF_HEADER_SIZE, 548);
         // Verify total size is reasonable

@@ -302,7 +302,7 @@ def test_enclave_eif_build_from_kernel(microvm_factory):
         initrd_path=vm.create_jailed_resource(initrd),
         boot_args=NE_CMDLINE,
     )
-    # Use production mode — the microVM initramfs doesn't have console support.
+    # Production mode — our CI kernel doesn't support the NE vsock console.
     enclave_kwargs = {"debug_mode": False}
     if cpu_ids:
         enclave_kwargs["cpu_ids"] = cpu_ids
@@ -319,11 +319,20 @@ def test_enclave_eif_build_from_kernel(microvm_factory):
         f"Expected 'Enclave started with CID=' in log, got:\n{log}"
     )
 
-    # The microVM kernel is not enclave-aware so the enclave will crash
-    # shortly after start. kill() may fail — that's expected.
-    try:
-        vm.kill()
-    except ProcessLookupError:
-        pass
+    # Poll until state transitions to "Running" (heartbeat received)
+    deadline = time.time() + 30
+    state = "Booting"
+    while time.time() < deadline:
+        response = vm.api.describe.get()
+        state = response.json()["state"]
+        if state == "Running":
+            break
+        time.sleep(0.5)
+
+    assert state == "Running", (
+        f"Expected state 'Running' after heartbeat, got '{state}'"
+    )
+
+    vm.kill()
 
 

@@ -94,7 +94,7 @@ fn test_eif_builder_basic() {
     assert_eq!(u16::from_be_bytes([eif[4], eif[5]]), 4);
     // Check reserved(u16) + num_sections(u16) at offset 24
     assert_eq!(u16::from_be_bytes([eif[24], eif[25]]), 0); // reserved
-    assert_eq!(u16::from_be_bytes([eif[26], eif[27]]), 3); // num_sections
+    assert_eq!(u16::from_be_bytes([eif[26], eif[27]]), 4); // num_sections
     // Check total size is reasonable
     assert!(eif.len() > 548); // > header size
 }
