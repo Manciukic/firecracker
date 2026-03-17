@@ -19,7 +19,8 @@ use pci::PciBdf;
 use uuid::Uuid;
 use vm_allocator::AddressAllocator;
 
-use crate::arch::{ArchVm as Vm, PCI_MMCONFIG_START, PCI_MMIO_CONFIG_SIZE_PER_SEGMENT};
+use crate::arch::{ArchVm, PCI_MMCONFIG_START, PCI_MMIO_CONFIG_SIZE_PER_SEGMENT};
+use crate::vstate::vm::Vm;
 #[cfg(target_arch = "x86_64")]
 use crate::pci::bus::{PCI_CONFIG_IO_PORT, PCI_CONFIG_IO_PORT_SIZE};
 use crate::pci::bus::{PciBus, PciConfigIo, PciConfigMmio, PciRoot, PciRootError};
@@ -76,7 +77,7 @@ impl PciSegment {
         let pci_config_mmio = Arc::new(Mutex::new(PciConfigMmio::new(Arc::clone(&pci_bus))));
         let mmio_config_address = PCI_MMCONFIG_START + PCI_MMIO_CONFIG_SIZE_PER_SEGMENT * id as u64;
 
-        vm.common.mmio_bus.insert(
+        vm.common().mmio_bus.insert(
             Arc::clone(&pci_config_mmio) as Arc<dyn BusDeviceSync>,
             mmio_config_address,
             PCI_MMIO_CONFIG_SIZE_PER_SEGMENT,
@@ -116,12 +117,10 @@ impl PciSegment {
         vm: &Arc<Vm>,
         pci_irq_slots: &[u8; 32],
     ) -> Result<PciSegment, BusError> {
-        use crate::Vm;
-
         let mut segment = Self::build(id, vm, pci_irq_slots)?;
         let pci_config_io = Arc::new(Mutex::new(PciConfigIo::new(Arc::clone(&segment.pci_bus))));
 
-        vm.pio_bus.insert(
+        vm.pio_bus().insert(
             pci_config_io.clone(),
             PCI_CONFIG_IO_PORT,
             PCI_CONFIG_IO_PORT_SIZE,
@@ -505,10 +504,10 @@ mod tests {
         let pci_segment = PciSegment::new(0, &vmm.vm, pci_irq_slots).unwrap();
 
         let mut data = [0u8; u64_to_usize(PCI_CONFIG_IO_PORT_SIZE)];
-        vmm.vm.pio_bus.read(PCI_CONFIG_IO_PORT, &mut data).unwrap();
+        vmm.vm.pio_bus().read(PCI_CONFIG_IO_PORT, &mut data).unwrap();
 
         vmm.vm
-            .pio_bus
+            .pio_bus()
             .read(PCI_CONFIG_IO_PORT + PCI_CONFIG_IO_PORT_SIZE, &mut data)
             .unwrap_err();
     }
@@ -522,12 +521,12 @@ mod tests {
         let mut data = [0u8; u64_to_usize(PCI_MMIO_CONFIG_SIZE_PER_SEGMENT)];
 
         vmm.vm
-            .common
+            .common()
             .mmio_bus
             .read(pci_segment.mmio_config_address, &mut data)
             .unwrap();
         vmm.vm
-            .common
+            .common()
             .mmio_bus
             .read(
                 pci_segment.mmio_config_address + PCI_MMIO_CONFIG_SIZE_PER_SEGMENT,

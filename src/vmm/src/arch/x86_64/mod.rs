@@ -63,7 +63,8 @@ use crate::vstate::memory::{
     Address, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion, GuestRegionType,
 };
 use crate::vstate::vcpu::KvmVcpuConfigureError;
-use crate::{Vcpu, VcpuConfig, Vm, logger};
+use crate::vstate::vm::ArchVm;
+use crate::{Vcpu, VcpuConfig, logger};
 
 // Value taken from https://elixir.bootlin.com/linux/v5.10.68/source/arch/x86/include/uapi/asm/e820.h#L31
 // Usable normal RAM
@@ -175,7 +176,7 @@ pub fn initrd_load_addr(guest_mem: &GuestMemoryMmap, initrd_size: usize) -> Opti
 #[allow(clippy::too_many_arguments)]
 pub fn configure_system_for_boot(
     kvm: &Kvm,
-    vm: &Vm,
+    vm: &ArchVm,
     device_manager: &mut DeviceManager,
     vcpus: &mut [Vcpu],
     machine_config: &MachineConfig,

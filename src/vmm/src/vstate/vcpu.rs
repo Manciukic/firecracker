@@ -125,7 +125,7 @@ impl Vcpu {
     /// * `index` - Represents the 0-based CPU index between [0, max vcpus).
     /// * `vm` - The vm to which this vcpu will get attached.
     /// * `exit_evt` - An `EventFd` that will be written into when this vcpu exits.
-    pub fn new(index: u8, vm: &Vm, exit_evt: EventFd) -> Result<Self, VcpuError> {
+    pub fn new(index: u8, vm: &crate::vstate::vm::ArchVm, exit_evt: EventFd) -> Result<Self, VcpuError> {
         let (event_sender, event_receiver) = channel();
         let (response_sender, response_receiver) = channel();
         let kvm_vcpu = KvmVcpu::new(index, vm).unwrap();
@@ -671,7 +671,7 @@ pub(crate) mod tests {
     use crate::vstate::kvm::Kvm;
     use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
     use crate::vstate::vcpu::VcpuError as EmulationError;
-    use crate::vstate::vm::Vm;
+    use crate::vstate::vm::{ArchVm, Vm};
     use crate::vstate::vm::tests::setup_vm_with_memory;
 
     struct DummyDevice;
@@ -827,7 +827,7 @@ pub(crate) mod tests {
 
     // Auxiliary function being used throughout the tests.
     #[allow(unused_mut)]
-    pub(crate) fn setup_vcpu(mem_size: usize) -> (Kvm, Vm, Vcpu) {
+    pub(crate) fn setup_vcpu(mem_size: usize) -> (Kvm, crate::vstate::vm::ArchVm, Vcpu) {
         let (kvm, mut vm) = setup_vm_with_memory(mem_size);
 
         let (mut vcpus, _) = vm.create_vcpus(1).unwrap();
@@ -914,6 +914,7 @@ pub(crate) mod tests {
 
         let mut seccomp_filters = get_empty_filters();
         let barrier = Arc::new(Barrier::new(2));
+        let vm = Vm::Kvm(vm);
         let vcpu_handle = vcpu
             .start_threaded(
                 &vm,

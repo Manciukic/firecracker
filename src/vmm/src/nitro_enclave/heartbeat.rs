@@ -9,11 +9,14 @@
 
 use std::io;
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::{Arc, Mutex};
 
 use event_manager::{EventOps, Events, MutEventSubscriber};
 use vmm_sys_util::epoll::EventSet;
 
+use crate::Vmm;
 use crate::logger::{error, info};
+use crate::vmm_config::instance_info::VmState;
 
 /// Port used for heartbeat communication.
 const HEARTBEAT_PORT: u32 = 9000;
@@ -40,6 +43,8 @@ pub struct Heartbeat {
     listen_fd: OwnedFd,
     /// Connected client fd (set after accept).
     conn_fd: Option<OwnedFd>,
+    /// Reference to the VMM, used to transition state from Booting → Running.
+    vmm: Arc<Mutex<Vmm>>,
 }
 
 impl std::fmt::Debug for Heartbeat {
@@ -56,7 +61,7 @@ impl Heartbeat {
     ///
     /// The listening socket is set to non-blocking so accept can be driven
     /// by epoll.
-    pub fn new() -> Result<Self, HeartbeatError> {
+    pub fn new(vmm: Arc<Mutex<Vmm>>) -> Result<Self, HeartbeatError> {
         let listen_fd = create_vsock_listener()?;
 
         // Set non-blocking for epoll-driven accept.
@@ -68,6 +73,7 @@ impl Heartbeat {
         Ok(Self {
             listen_fd,
             conn_fd: None,
+            vmm,
         })
     }
 
@@ -122,7 +128,11 @@ impl Heartbeat {
         if n <= 0 {
             info!("Failed to echo heartbeat byte");
         } else {
-            info!("Heartbeat OK");
+            info!("Heartbeat OK — transitioning to Running");
+            let mut locked_vmm = self.vmm.lock().expect("Poisoned lock");
+            if locked_vmm.instance_info.state == VmState::Booting {
+                locked_vmm.instance_info.state = VmState::Running;
+            }
         }
 
         true

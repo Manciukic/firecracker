@@ -120,7 +120,7 @@ impl PortIODeviceManager {
             input: None,
         }));
 
-        let io_bus = &vm.pio_bus;
+        let io_bus = vm.pio_bus();
         io_bus.insert(
             self.stdio_serial.clone(),
             Self::SERIAL_PORT_ADDRESSES[0],
@@ -238,11 +238,13 @@ impl PortIODeviceManager {
 mod tests {
     use super::*;
     use crate::vstate::vm::tests::setup_vm_with_memory;
+    use crate::vstate::vm::Vm;
 
     #[test]
     fn test_register_legacy_devices() {
         let (_, vm) = setup_vm_with_memory(0x1000);
         vm.setup_irqchip().unwrap();
+        let vm = Vm::Kvm(vm);
         let mut ldm = PortIODeviceManager::new(
             Arc::new(Mutex::new(SerialDevice {
                 serial: Serial::with_events(

@@ -24,8 +24,10 @@ use serde::{Deserialize, Serialize};
 use vmm_sys_util::errno;
 use vmm_sys_util::eventfd::EventFd;
 
-pub use crate::arch::{ArchVm as Vm, ArchVmError, VmState};
+pub use crate::arch::{ArchVm, ArchVmError, VmState};
 use crate::arch::{GSI_MSI_END, host_page_size};
+#[cfg(feature = "nitro-enclave")]
+use crate::nitro_enclave::enclave_vm::EnclaveVm;
 use crate::logger::info;
 use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice};
 use crate::persist::CreateSnapshotError;
@@ -93,8 +95,159 @@ pub enum VmError {
     MemoryError(#[from] MemoryError),
 }
 
-/// Contains Vm functions that are usable across CPU architectures
+/// VM abstraction: either a KVM-based VM or a Nitro Enclave.
+#[derive(Debug)]
+pub enum Vm {
+    /// KVM-backed virtual machine.
+    Kvm(ArchVm),
+    /// Nitro Enclave-backed virtual machine.
+    #[cfg(feature = "nitro-enclave")]
+    Enclave(EnclaveVm),
+}
+
 impl Vm {
+    /// Returns true if this is an enclave VM.
+    #[cfg(feature = "nitro-enclave")]
+    pub fn is_enclave(&self) -> bool {
+        matches!(self, Vm::Enclave(_))
+    }
+
+    /// Returns a reference to the inner KVM VM. Panics if called on an enclave.
+    pub fn as_kvm(&self) -> &ArchVm {
+        match self {
+            Vm::Kvm(v) => v,
+            #[cfg(feature = "nitro-enclave")]
+            Vm::Enclave(_) => panic!("as_kvm() called on non-KVM Vm"),
+        }
+    }
+
+    /// Returns a mutable reference to the inner KVM VM. Panics if called on an enclave.
+    pub fn as_kvm_mut(&mut self) -> &mut ArchVm {
+        match self {
+            Vm::Kvm(v) => v,
+            #[cfg(feature = "nitro-enclave")]
+            Vm::Enclave(_) => panic!("as_kvm_mut() called on non-KVM Vm"),
+        }
+    }
+
+    /// Gets a reference to this VM's [`GuestMemoryMmap`] object.
+    /// Only available for KVM VMs.
+    pub fn guest_memory(&self) -> &GuestMemoryMmap {
+        self.as_kvm().guest_memory()
+    }
+
+    /// Gets a reference to the kvm file descriptor owned by this VM.
+    /// Only available for KVM VMs.
+    pub fn fd(&self) -> &VmFd {
+        self.as_kvm().fd()
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    /// Gets the list of MSRs to save when creating snapshots.
+    /// Only available for KVM VMs on x86_64.
+    pub fn msrs_to_save(&self) -> &[u32] {
+        self.as_kvm().msrs_to_save()
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    /// Gets the size (in bytes) of the `kvm_xsave` struct.
+    /// Only available for KVM VMs on x86_64.
+    pub fn xsave2_size(&self) -> Option<usize> {
+        self.as_kvm().xsave2_size()
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    /// Creates the irq chip and an in-kernel device model for the PIT.
+    /// Only available for KVM VMs on x86_64.
+    pub fn setup_irqchip(&self) -> Result<(), ArchVmError> {
+        self.as_kvm().setup_irqchip()
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    /// Creates the GIC (Global Interrupt Controller).
+    /// Only available for KVM VMs on aarch64.
+    pub fn setup_irqchip(&mut self, vcpu_count: u8) -> Result<(), ArchVmError> {
+        self.as_kvm_mut().setup_irqchip(vcpu_count)
+    }
+
+    /// Gets a reference to the VmCommon struct.
+    pub fn common(&self) -> &VmCommon {
+        &self.as_kvm().common
+    }
+
+    /// Gets a reference to the PIO bus (x86_64 only).
+    #[cfg(target_arch = "x86_64")]
+    pub fn pio_bus(&self) -> &Arc<Bus> {
+        &self.as_kvm().pio_bus
+    }
+
+    /// Gets a mutable reference to this VM's [`ResourceAllocator`] object.
+    pub fn resource_allocator(&self) -> MutexGuard<'_, ResourceAllocator> {
+        self.as_kvm().resource_allocator()
+    }
+
+    /// Register a device IRQ.
+    pub fn register_irq(&self, fd: &EventFd, gsi: u32) -> Result<(), errno::Error> {
+        self.as_kvm().register_irq(fd, gsi)
+    }
+
+    /// Register an MSI device interrupt.
+    pub fn register_msi(
+        &self,
+        route: &MsixVector,
+        masked: bool,
+        config: MsixVectorConfig,
+    ) -> Result<(), errno::Error> {
+        self.as_kvm().register_msi(route, masked, config)
+    }
+
+    /// Set GSI routes to KVM.
+    pub fn set_gsi_routes(&self) -> Result<(), InterruptError> {
+        self.as_kvm().set_gsi_routes()
+    }
+
+    /// Creates an MSI-X vector group for PCI devices.
+    pub fn create_msix_group(vm: Arc<Vm>, count: u16) -> Result<MsixVectorGroup, InterruptError> {
+        ArchVm::create_msix_group(vm, count)
+    }
+
+    /// Reserves the next `slot_cnt` contiguous kvm slot ids.
+    pub fn next_kvm_slot(&self, slot_cnt: u32) -> Option<u32> {
+        self.as_kvm().next_kvm_slot(slot_cnt)
+    }
+
+    /// Set user memory region.
+    pub(crate) fn set_user_memory_region(
+        &self,
+        region: kvm_userspace_memory_region,
+    ) -> Result<(), VmError> {
+        self.as_kvm().set_user_memory_region(region)
+    }
+
+    /// Takes a snapshot of guest memory to file.
+    pub(crate) fn snapshot_memory_to_file(
+        &self,
+        mem_file_path: &Path,
+        snapshot_type: SnapshotType,
+    ) -> Result<(), CreateSnapshotError> {
+        self.as_kvm().snapshot_memory_to_file(mem_file_path, snapshot_type)
+    }
+
+    /// Saves and returns the Kvm Vm state.
+    #[cfg(target_arch = "x86_64")]
+    pub fn save_state(&self) -> Result<VmState, ArchVmError> {
+        self.as_kvm().save_state()
+    }
+
+    /// Saves and returns the Kvm Vm state.
+    #[cfg(target_arch = "aarch64")]
+    pub fn save_state(&self, mpidrs: &[u64]) -> Result<VmState, ArchVmError> {
+        self.as_kvm().save_state(mpidrs)
+    }
+}
+
+/// Contains ArchVm functions that are usable across CPU architectures
+impl ArchVm {
     /// Create a KVM VM
     pub fn create_common(kvm: &crate::vstate::kvm::Kvm) -> Result<VmCommon, VmError> {
         // It is known that KVM_CREATE_VM occasionally fails with EINTR on heavily loaded machines
@@ -474,6 +627,7 @@ impl Vm {
         debug!("Creating new MSI group with {count} vectors");
         let mut vectors = Vec::with_capacity(count as usize);
         for gsi in vm
+            .as_kvm()
             .resource_allocator()
             .allocate_gsi_msi(count as u32)?
             .iter()
@@ -536,7 +690,7 @@ fn mincore_bitmap(addr: *mut u8, len: usize) -> Result<Vec<u64>, VmError> {
     Ok(bitmap)
 }
 
-impl DeviceRelocation for Vm {
+impl DeviceRelocation for ArchVm {
     fn move_bar(
         &self,
         _old_base: u64,
@@ -545,6 +699,18 @@ impl DeviceRelocation for Vm {
         _pci_dev: &mut dyn PciDevice,
     ) -> Result<(), DeviceRelocationError> {
         Err(DeviceRelocationError::NotSupported)
+    }
+}
+
+impl DeviceRelocation for Vm {
+    fn move_bar(
+        &self,
+        old_base: u64,
+        new_base: u64,
+        len: u64,
+        pci_dev: &mut dyn PciDevice,
+    ) -> Result<(), DeviceRelocationError> {
+        self.as_kvm().move_bar(old_base, new_base, len, pci_dev)
     }
 }
 
@@ -563,14 +729,14 @@ pub(crate) mod tests {
     use crate::vstate::memory::GuestRegionMmap;
 
     // Auxiliary function being used throughout the tests.
-    pub(crate) fn setup_vm() -> (Kvm, Vm) {
+    pub(crate) fn setup_vm() -> (Kvm, ArchVm) {
         let kvm = Kvm::new(vec![]).expect("Cannot create Kvm");
-        let vm = Vm::new(&kvm).expect("Cannot create new vm");
+        let vm = ArchVm::new(&kvm).expect("Cannot create new vm");
         (kvm, vm)
     }
 
     // Auxiliary function being used throughout the tests.
-    pub(crate) fn setup_vm_with_memory(mem_size: usize) -> (Kvm, Vm) {
+    pub(crate) fn setup_vm_with_memory(mem_size: usize) -> (Kvm, ArchVm) {
         let (kvm, mut vm) = setup_vm();
         let gm = single_region_mem_raw(mem_size);
         vm.register_dram_memory_regions(gm).unwrap();
@@ -581,7 +747,7 @@ pub(crate) mod tests {
     fn test_new() {
         // Testing with a valid /dev/kvm descriptor.
         let kvm = Kvm::new(vec![]).expect("Cannot create Kvm");
-        Vm::new(&kvm).unwrap();
+        ArchVm::new(&kvm).unwrap();
     }
 
     #[test]
@@ -664,7 +830,7 @@ pub(crate) mod tests {
         assert_eq!(vcpu_vec.len(), vcpu_count as usize);
     }
 
-    fn enable_irqchip(vm: &mut Vm) {
+    fn enable_irqchip(vm: &mut ArchVm) {
         #[cfg(target_arch = "x86_64")]
         vm.setup_irqchip().unwrap();
         #[cfg(target_arch = "aarch64")]
@@ -672,13 +838,13 @@ pub(crate) mod tests {
     }
 
     fn create_msix_group(vm: &Arc<Vm>) -> MsixVectorGroup {
-        Vm::create_msix_group(vm.clone(), 4).unwrap()
+        ArchVm::create_msix_group(vm.clone(), 4).unwrap()
     }
 
     #[test]
     fn test_msi_vector_group_new() {
         let (_, vm) = setup_vm_with_memory(mib_to_bytes(128));
-        let vm = Arc::new(vm);
+        let vm = Arc::new(Vm::Kvm(vm));
         let msix_group = create_msix_group(&vm);
         assert_eq!(msix_group.num_vectors(), 4);
     }
@@ -687,7 +853,7 @@ pub(crate) mod tests {
     fn test_msi_vector_group_enable_disable() {
         let (_, mut vm) = setup_vm_with_memory(mib_to_bytes(128));
         enable_irqchip(&mut vm);
-        let vm = Arc::new(vm);
+        let vm = Arc::new(Vm::Kvm(vm));
         let msix_group = create_msix_group(&vm);
 
         // Initially all vectors are disabled
@@ -716,7 +882,7 @@ pub(crate) mod tests {
         let (_, mut vm) = setup_vm_with_memory(mib_to_bytes(128));
         enable_irqchip(&mut vm);
 
-        let vm = Arc::new(vm);
+        let vm = Arc::new(Vm::Kvm(vm));
         let msix_group = create_msix_group(&vm);
 
         // We can now trigger all vectors
@@ -731,7 +897,7 @@ pub(crate) mod tests {
     #[test]
     fn test_msi_vector_group_notifier() {
         let (_, vm) = setup_vm_with_memory(mib_to_bytes(128));
-        let vm = Arc::new(vm);
+        let vm = Arc::new(Vm::Kvm(vm));
         let msix_group = create_msix_group(&vm);
 
         for i in 0..4 {
@@ -745,7 +911,7 @@ pub(crate) mod tests {
     fn test_msi_vector_group_update_invalid_vector() {
         let (_, mut vm) = setup_vm_with_memory(mib_to_bytes(128));
         enable_irqchip(&mut vm);
-        let vm = Arc::new(vm);
+        let vm = Arc::new(Vm::Kvm(vm));
         let msix_group = create_msix_group(&vm);
         let config = MsixVectorConfig {
             high_addr: 0x42,
@@ -761,8 +927,8 @@ pub(crate) mod tests {
     fn test_msi_vector_group_update() {
         let (_, mut vm) = setup_vm_with_memory(mib_to_bytes(128));
         enable_irqchip(&mut vm);
-        let vm = Arc::new(vm);
-        assert!(vm.common.interrupts.lock().unwrap().is_empty());
+        let vm = Arc::new(Vm::Kvm(vm));
+        assert!(vm.as_kvm().common.interrupts.lock().unwrap().is_empty());
         let msix_group = create_msix_group(&vm);
 
         // Set some configuration for the vectors. Initially all are masked
@@ -784,7 +950,7 @@ pub(crate) mod tests {
 
         for i in 0..4 {
             let gsi = crate::arch::GSI_MSI_START + i;
-            let interrupts = vm.common.interrupts.lock().unwrap();
+            let interrupts = vm.as_kvm().common.interrupts.lock().unwrap();
             let kvm_route = interrupts.get(&gsi).unwrap();
             assert!(kvm_route.masked);
             assert_eq!(kvm_route.entry.gsi, gsi);
@@ -801,7 +967,7 @@ pub(crate) mod tests {
         msix_group.enable().unwrap();
         for i in 0..4 {
             let gsi = crate::arch::GSI_MSI_START + i;
-            let interrupts = vm.common.interrupts.lock().unwrap();
+            let interrupts = vm.as_kvm().common.interrupts.lock().unwrap();
             let kvm_route = interrupts.get(&gsi).unwrap();
             assert!(kvm_route.masked);
             assert_eq!(kvm_route.entry.gsi, gsi);
@@ -819,7 +985,7 @@ pub(crate) mod tests {
         msix_group.update(0, config, false, true).unwrap();
         for i in 0..4 {
             let gsi = crate::arch::GSI_MSI_START + i;
-            let interrupts = vm.common.interrupts.lock().unwrap();
+            let interrupts = vm.as_kvm().common.interrupts.lock().unwrap();
             let kvm_route = interrupts.get(&gsi).unwrap();
             assert_eq!(kvm_route.masked, i != 0);
             assert_eq!(kvm_route.entry.gsi, gsi);
@@ -837,7 +1003,7 @@ pub(crate) mod tests {
     fn test_msi_vector_group_persistence() {
         let (_, mut vm) = setup_vm_with_memory(mib_to_bytes(128));
         enable_irqchip(&mut vm);
-        let vm = Arc::new(vm);
+        let vm = Arc::new(Vm::Kvm(vm));
         let msix_group = create_msix_group(&vm);
 
         msix_group.enable().unwrap();

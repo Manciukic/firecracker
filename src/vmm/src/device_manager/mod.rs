@@ -239,7 +239,7 @@ impl DeviceManager {
         let boot_timer = Arc::new(Mutex::new(BootTimer::new(request_ts)));
 
         self.mmio_devices
-            .register_mmio_boot_timer(&vm.common.mmio_bus, boot_timer)?;
+            .register_mmio_boot_timer(&vm.common().mmio_bus, boot_timer)?;
 
         Ok(())
     }

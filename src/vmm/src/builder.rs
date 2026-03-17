@@ -54,7 +54,7 @@ use crate::vstate::memory::GuestRegionMmap;
 #[cfg(target_arch = "aarch64")]
 use crate::vstate::resources::ResourceAllocator;
 use crate::vstate::vcpu::VcpuError;
-use crate::vstate::vm::{Vm, VmError};
+use crate::vstate::vm::{ArchVm, Vm, VmError};
 use crate::{EventManager, Vmm, VmmError};
 
 /// Errors associated with starting the instance.
@@ -170,7 +170,7 @@ pub fn build_microvm_for_boot(
     let kvm = Kvm::new(cpu_template.kvm_capabilities.clone())?;
     // Set up Kvm Vm and register memory regions.
     // Build custom CPU config if a custom template is provided.
-    let mut vm = Vm::new(&kvm)?;
+    let mut vm = ArchVm::new(&kvm)?;
     let (mut vcpus, vcpus_exit_evt) = vm.create_vcpus(vm_resources.machine_config.vcpu_count)?;
     vm.register_dram_memory_regions(guest_memory)?;
 
@@ -190,14 +190,14 @@ pub fn build_microvm_for_boot(
         None
     };
 
+    let vm = Arc::new(Vm::Kvm(vm));
+
     let mut device_manager = DeviceManager::new(
         event_manager,
         &vcpus_exit_evt,
         &vm,
         vm_resources.serial_out_path.as_ref(),
     )?;
-
-    let vm = Arc::new(vm);
 
     let entry_point = load_kernel(&boot_config.kernel_file, vm.guest_memory())?;
     let initrd = InitrdConfig::from_config(boot_config, vm.guest_memory())?;
@@ -292,11 +292,25 @@ pub fn build_microvm_for_boot(
 
     #[cfg(target_arch = "aarch64")]
     if vcpus[0].kvm_vcpu.supports_pvtime() {
-        setup_pvtime(&mut vm.resource_allocator(), &mut vcpus)?;
+        setup_pvtime(&mut *vm.resource_allocator(), &mut vcpus)?;
     } else {
         log::warn!("Vcpus do not support pvtime, steal time will not be reported to guest");
     }
 
+    #[cfg(target_arch = "x86_64")]
+    configure_system_for_boot(
+        &kvm,
+        vm.as_kvm(),
+        &mut device_manager,
+        vcpus.as_mut(),
+        &vm_resources.machine_config,
+        &cpu_template,
+        entry_point,
+        &initrd,
+        boot_cmdline,
+    )?;
+
+    #[cfg(target_arch = "aarch64")]
     configure_system_for_boot(
         &kvm,
         &vm,
@@ -308,18 +322,21 @@ pub fn build_microvm_for_boot(
         &initrd,
         boot_cmdline,
     )?;
-
     let vmm = Vmm {
         instance_info: instance_info.clone(),
         machine_config: vm_resources.machine_config.clone(),
         boot_source_config: vm_resources.boot_source.config.clone(),
         shutdown_exit_code: None,
-        kvm,
         vm,
+        kvm: Some(kvm),
         uffd: None,
         vcpus_handles: Vec::new(),
-        vcpus_exit_evt,
-        device_manager,
+        vcpus_exit_evt: Some(vcpus_exit_evt),
+        device_manager: Some(device_manager),
+        #[cfg(feature = "nitro-enclave")]
+        enclave_cid: None,
+        #[cfg(feature = "nitro-enclave")]
+        enclave_debug_mode: false,
     };
     let vmm = Arc::new(Mutex::new(vmm));
 
@@ -448,7 +465,7 @@ pub fn build_microvm_from_snapshot(
         .map_err(StartMicrovmError::Kvm)?;
     // Set up Kvm Vm and register memory regions.
     // Build custom CPU config if a custom template is provided.
-    let mut vm = Vm::new(&kvm).map_err(StartMicrovmError::Vm)?;
+    let mut vm = ArchVm::new(&kvm).map_err(StartMicrovmError::Vm)?;
 
     let (mut vcpus, vcpus_exit_evt) = vm
         .create_vcpus(vm_resources.machine_config.vcpu_count)
@@ -493,7 +510,7 @@ pub fn build_microvm_from_snapshot(
     // Restore the boot source config paths.
     vm_resources.boot_source.config = microvm_state.vm_info.boot_source;
 
-    let vm = Arc::new(vm);
+    let vm = Arc::new(Vm::Kvm(vm));
 
     // Restore devices states.
     // Restoring VMGenID injects an interrupt in the guest to notify it about the new generation
@@ -511,29 +528,35 @@ pub fn build_microvm_from_snapshot(
     let mut device_manager =
         DeviceManager::restore(device_ctor_args, &microvm_state.device_states)?;
 
-    let mut vmm = Vmm {
+    let vmm = Vmm {
         instance_info: instance_info.clone(),
         machine_config: vm_resources.machine_config.clone(),
         boot_source_config: vm_resources.boot_source.config.clone(),
         shutdown_exit_code: None,
-        kvm,
         vm,
+        kvm: Some(kvm),
         uffd,
         vcpus_handles: Vec::new(),
-        vcpus_exit_evt,
-        device_manager,
+        vcpus_exit_evt: Some(vcpus_exit_evt),
+        device_manager: Some(device_manager),
+        #[cfg(feature = "nitro-enclave")]
+        enclave_cid: None,
+        #[cfg(feature = "nitro-enclave")]
+        enclave_debug_mode: false,
     };
 
-    // Move vcpus to their own threads and start their state machine in the 'Paused' state.
-    vmm.start_vcpus(
-        vcpus,
-        seccomp_filters
-            .get("vcpu")
-            .ok_or(BuildMicrovmFromSnapshotError::MissingVcpuSeccompFilters)?
-            .clone(),
-    )?;
-
     let vmm = Arc::new(Mutex::new(vmm));
+
+    // Move vcpus to their own threads and start their state machine in the 'Paused' state.
+    vmm.lock()
+        .unwrap()
+        .start_vcpus(
+            vcpus,
+            seccomp_filters
+                .get("vcpu")
+                .ok_or(BuildMicrovmFromSnapshotError::MissingVcpuSeccompFilters)?
+                .clone(),
+        )?;
     event_manager.add_subscriber(vmm.clone());
 
     // Load seccomp filters for the VMM thread.
@@ -615,7 +638,7 @@ fn attach_entropy_device(
 }
 
 fn allocate_virtio_mem_address(
-    vm: &Vm,
+    vm: &ArchVm,
     total_size_mib: usize,
 ) -> Result<GuestAddress, StartMicrovmError> {
     let addr = vm
@@ -735,8 +758,8 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
                     false => cmdline.insert_str("rw")?,
                 }
             }
-            locked_dev.alloc_region(vm.as_ref());
-            locked_dev.set_mem_region(vm.as_ref())?;
+            locked_dev.alloc_region(&**vm);
+            locked_dev.set_mem_region(&**vm)?;
             locked_dev.config.id.to_string()
         };
 
@@ -865,12 +888,16 @@ pub(crate) mod tests {
             machine_config: MachineConfig::default(),
             boot_source_config: BootSourceConfig::default(),
             shutdown_exit_code: None,
-            kvm,
-            vm: Arc::new(vm),
+            vm: Arc::new(Vm::Kvm(vm)),
+            kvm: Some(kvm),
             uffd: None,
             vcpus_handles: Vec::new(),
-            vcpus_exit_evt,
-            device_manager: default_device_manager(),
+            vcpus_exit_evt: Some(vcpus_exit_evt),
+            device_manager: Some(default_device_manager()),
+            #[cfg(feature = "nitro-enclave")]
+            enclave_cid: None,
+            #[cfg(feature = "nitro-enclave")]
+            enclave_debug_mode: false,
         }
     }
 
@@ -913,7 +940,7 @@ pub(crate) mod tests {
         }
 
         attach_block_devices(
-            &mut vmm.device_manager,
+            vmm.device_manager.as_mut().unwrap(),
             &vmm.vm,
             cmdline,
             block_dev_configs.devices.iter(),
@@ -933,7 +960,7 @@ pub(crate) mod tests {
         net_builder.build(net_config).unwrap();
 
         let res = attach_net_devices(
-            &mut vmm.device_manager,
+            vmm.device_manager.as_mut().unwrap(),
             &vmm.vm,
             cmdline,
             net_builder.iter(),
@@ -960,7 +987,7 @@ pub(crate) mod tests {
         );
 
         attach_net_devices(
-            &mut vmm.device_manager,
+            vmm.device_manager.as_mut().unwrap(),
             &vmm.vm,
             cmdline,
             net_builder.iter(),
@@ -980,7 +1007,7 @@ pub(crate) mod tests {
         let vsock = Arc::new(Mutex::new(vsock));
 
         attach_unixsock_vsock_device(
-            &mut vmm.device_manager,
+            vmm.device_manager.as_mut().unwrap(),
             &vmm.vm,
             cmdline,
             &vsock,
@@ -989,7 +1016,7 @@ pub(crate) mod tests {
         .unwrap();
 
         assert!(
-            vmm.device_manager
+            vmm.device_manager.as_ref().unwrap()
                 .get_virtio_device(VirtioDeviceType::Vsock, &vsock_dev_id)
                 .is_some()
         );
@@ -1005,7 +1032,7 @@ pub(crate) mod tests {
         let entropy = builder.build(entropy_config).unwrap();
 
         attach_entropy_device(
-            &mut vmm.device_manager,
+            vmm.device_manager.as_mut().unwrap(),
             &vmm.vm,
             cmdline,
             &entropy,
@@ -1014,7 +1041,7 @@ pub(crate) mod tests {
         .unwrap();
 
         assert!(
-            vmm.device_manager
+            vmm.device_manager.as_ref().unwrap()
                 .get_virtio_device(VirtioDeviceType::Rng, ENTROPY_DEV_ID)
                 .is_some()
         );
@@ -1038,7 +1065,7 @@ pub(crate) mod tests {
         }
 
         attach_pmem_devices(
-            &mut vmm.device_manager,
+            vmm.device_manager.as_mut().unwrap(),
             &vmm.vm,
             cmdline,
             builder.devices.iter(),
@@ -1050,12 +1077,12 @@ pub(crate) mod tests {
 
     #[cfg(target_arch = "x86_64")]
     pub(crate) fn insert_vmgenid_device(vmm: &mut Vmm) {
-        vmm.device_manager.attach_vmgenid_device(&vmm.vm).unwrap();
+        vmm.device_manager.as_mut().unwrap().attach_vmgenid_device(&vmm.vm).unwrap();
     }
 
     #[cfg(target_arch = "x86_64")]
     pub(crate) fn insert_vmclock_device(vmm: &mut Vmm) {
-        vmm.device_manager.attach_vmclock_device(&vmm.vm).unwrap();
+        vmm.device_manager.as_mut().unwrap().attach_vmclock_device(&vmm.vm).unwrap();
     }
 
     pub(crate) fn insert_balloon_device(
@@ -1069,7 +1096,7 @@ pub(crate) mod tests {
         let balloon = builder.get().unwrap();
 
         attach_balloon_device(
-            &mut vmm.device_manager,
+            vmm.device_manager.as_mut().unwrap(),
             &vmm.vm,
             cmdline,
             balloon,
@@ -1078,7 +1105,7 @@ pub(crate) mod tests {
         .unwrap();
 
         assert!(
-            vmm.device_manager
+            vmm.device_manager.as_ref().unwrap()
                 .get_virtio_device(VirtioDeviceType::Balloon, BALLOON_DEV_ID)
                 .is_some()
         );
@@ -1129,7 +1156,7 @@ pub(crate) mod tests {
             insert_block_devices(&mut vmm, &mut cmdline, &mut event_manager, block_configs);
             assert!(cmdline_contains(&cmdline, "root=/dev/vda ro"));
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, drive_id.as_str())
                     .is_some()
             );
@@ -1150,7 +1177,7 @@ pub(crate) mod tests {
             insert_block_devices(&mut vmm, &mut cmdline, &mut event_manager, block_configs);
             assert!(cmdline_contains(&cmdline, "root=PARTUUID=0eaa91a0-01 rw"));
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, drive_id.as_str())
                     .is_some()
             );
@@ -1172,7 +1199,7 @@ pub(crate) mod tests {
             assert!(!cmdline_contains(&cmdline, "root=PARTUUID="));
             assert!(!cmdline_contains(&cmdline, "root=/dev/vda"));
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, drive_id.as_str())
                     .is_some()
             );
@@ -1209,17 +1236,17 @@ pub(crate) mod tests {
 
             assert!(cmdline_contains(&cmdline, "root=PARTUUID=0eaa91a0-01 rw"));
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, "root")
                     .is_some()
             );
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, "secondary")
                     .is_some()
             );
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, "third")
                     .is_some()
             );
@@ -1248,7 +1275,7 @@ pub(crate) mod tests {
             insert_block_devices(&mut vmm, &mut cmdline, &mut event_manager, block_configs);
             assert!(cmdline_contains(&cmdline, "root=/dev/vda rw"));
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, drive_id.as_str())
                     .is_some()
             );
@@ -1269,7 +1296,7 @@ pub(crate) mod tests {
             insert_block_devices(&mut vmm, &mut cmdline, &mut event_manager, block_configs);
             assert!(cmdline_contains(&cmdline, "root=PARTUUID=0eaa91a0-01 ro"));
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, drive_id.as_str())
                     .is_some()
             );
@@ -1290,7 +1317,7 @@ pub(crate) mod tests {
             insert_block_devices(&mut vmm, &mut cmdline, &mut event_manager, block_configs);
             assert!(cmdline_contains(&cmdline, "root=/dev/vda rw"));
             assert!(
-                vmm.device_manager
+                vmm.device_manager.as_ref().unwrap()
                     .get_virtio_device(VirtioDeviceType::Block, drive_id.as_str())
                     .is_some()
             );
@@ -1313,7 +1340,7 @@ pub(crate) mod tests {
         _ = insert_pmem_devices(&mut vmm, &mut cmdline, &mut event_manager, configs);
         assert!(cmdline_contains(&cmdline, "root=/dev/pmem0 ro"));
         assert!(
-            vmm.device_manager
+            vmm.device_manager.as_ref().unwrap()
                 .get_virtio_device(VirtioDeviceType::Pmem, id.as_str())
                 .is_some()
         );
@@ -1325,10 +1352,10 @@ pub(crate) mod tests {
         let request_ts = TimestampUs::default();
 
         let res = vmm
-            .device_manager
+            .device_manager.as_mut().unwrap()
             .attach_boot_timer_device(&vmm.vm, request_ts);
         res.unwrap();
-        assert!(vmm.device_manager.mmio_devices.boot_timer.is_some());
+        assert!(vmm.device_manager.as_ref().unwrap().mmio_devices.boot_timer.is_some());
     }
 
     #[test]
@@ -1397,7 +1424,7 @@ pub(crate) mod tests {
         config: MemoryHotplugConfig,
     ) {
         attach_virtio_mem_device(
-            &mut vmm.device_manager,
+            vmm.device_manager.as_mut().unwrap(),
             &vmm.vm,
             cmdline,
             &config,

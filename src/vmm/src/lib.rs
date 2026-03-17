@@ -123,6 +123,8 @@ pub mod nitro_enclave;
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::io::AsRawFd;
+#[cfg(feature = "nitro-enclave")]
+use std::os::unix::io::FromRawFd;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
@@ -331,22 +333,45 @@ pub struct Vmm {
     boot_source_config: BootSourceConfig,
     shutdown_exit_code: Option<FcExitCode>,
 
-    // Guest VM core resources.
-    kvm: Kvm,
-    /// VM object
+    /// VM object (KVM or Enclave)
     pub vm: Arc<Vm>,
+
+    // KVM-specific fields (None/empty for enclaves)
+    kvm: Option<Kvm>,
     // Save UFFD in order to keep it open in the Firecracker process, as well.
     #[allow(unused)]
     uffd: Option<Uffd>,
     /// Handles to the vcpu threads with vcpu_fds inside them.
     pub vcpus_handles: Vec<VcpuHandle>,
     // Used by Vcpus and devices to initiate teardown; Vmm should never write here.
-    vcpus_exit_evt: EventFd,
-    // Device manager
-    device_manager: DeviceManager,
+    vcpus_exit_evt: Option<EventFd>,
+    // Device manager (None for enclaves)
+    device_manager: Option<DeviceManager>,
+
+    // Enclave-specific fields
+    /// Assigned enclave CID (only set for enclave VMs).
+    #[cfg(feature = "nitro-enclave")]
+    pub enclave_cid: Option<u64>,
+    /// Whether enclave debug mode is active.
+    #[cfg(feature = "nitro-enclave")]
+    pub enclave_debug_mode: bool,
 }
 
 impl Vmm {
+    /// Access the device manager. Panics for enclave VMs.
+    fn device_manager(&self) -> &DeviceManager {
+        self.device_manager
+            .as_ref()
+            .expect("device_manager not available for enclave VMs")
+    }
+
+    /// Mutably access the device manager. Panics for enclave VMs.
+    fn device_manager_mut(&mut self) -> &mut DeviceManager {
+        self.device_manager
+            .as_mut()
+            .expect("device_manager not available for enclave VMs")
+    }
+
     /// Gets Vmm version.
     pub fn version(&self) -> String {
         self.instance_info.vmm_version.clone()
@@ -360,7 +385,7 @@ impl Vmm {
     /// Gets MMDS reference, if any.
     pub fn get_mmds(&self) -> Option<Arc<Mutex<Mmds>>> {
         let mut mmds = None;
-        self.device_manager
+        self.device_manager()
             .for_each_virtio_device(|device_type, device| {
                 if device_type == VirtioDeviceType::Net
                     && let Some(net) = device.as_any().downcast_ref::<Net>()
@@ -386,7 +411,7 @@ impl Vmm {
         let mut mmds_ipv4_address = None;
         let mut mmds_ref = None;
 
-        self.device_manager
+        self.device_manager()
             .for_each_virtio_device(|device_type, device| match device_type {
                 VirtioDeviceType::Block => {
                     if let Some(b) = device.as_any().downcast_ref::<Block>() {
@@ -495,9 +520,9 @@ impl Vmm {
         self.vcpus_handles.reserve(vcpu_count);
 
         for mut vcpu in vcpus.drain(..) {
-            vcpu.set_mmio_bus(self.vm.common.mmio_bus.clone());
+            vcpu.set_mmio_bus(self.vm.as_kvm().common.mmio_bus.clone());
             #[cfg(target_arch = "x86_64")]
-            vcpu.kvm_vcpu.set_pio_bus(self.vm.pio_bus.clone());
+            vcpu.kvm_vcpu.set_pio_bus(self.vm.as_kvm().pio_bus.clone());
 
             self.vcpus_handles.push(vcpu.start_threaded(
                 &self.vm,
@@ -514,7 +539,7 @@ impl Vmm {
 
     /// Sends a resume command to the vCPUs.
     pub fn resume_vm(&mut self) -> Result<(), VmmError> {
-        self.device_manager.kick_virtio_devices();
+        self.device_manager().kick_virtio_devices();
 
         // Send the events.
         self.vcpus_handles
@@ -561,7 +586,7 @@ impl Vmm {
     /// Injects CTRL+ALT+DEL keystroke combo in the i8042 device.
     #[cfg(target_arch = "x86_64")]
     pub fn send_ctrl_alt_del(&mut self) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .legacy_devices
             .i8042
             .lock()
@@ -578,9 +603,9 @@ impl Vmm {
         // might modify the VirtIO transport and send an interrupt to the guest. If we save KVM
         // state before we save device state, that interrupt will never be delivered to the guest
         // upon resuming from the snapshot.
-        let device_states = self.device_manager.save();
+        let device_states = self.device_manager().save();
         let vcpu_states = self.save_vcpu_states()?;
-        let kvm_state = self.kvm.save_state();
+        let kvm_state = self.kvm.as_ref().expect("kvm not available for enclaves").save_state();
         let vm_state = {
             #[cfg(target_arch = "x86_64")]
             {
@@ -666,7 +691,7 @@ impl Vmm {
         drive_id: &str,
         path_on_host: String,
     ) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(drive_id, |block: &mut Block| {
                 block.update_disk_image(path_on_host)
             })??;
@@ -680,7 +705,7 @@ impl Vmm {
         rl_bytes: BucketUpdate,
         rl_ops: BucketUpdate,
     ) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(drive_id, |block: &mut Block| {
                 block.update_rate_limiter(rl_bytes, rl_ops)
             })??;
@@ -689,7 +714,7 @@ impl Vmm {
 
     /// Updates the rate limiter parameters for block device with `drive_id` id.
     pub fn update_vhost_user_block_config(&mut self, drive_id: &str) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(drive_id, |block: &mut Block| block.update_config())??;
         Ok(())
     }
@@ -703,7 +728,7 @@ impl Vmm {
         tx_bytes: BucketUpdate,
         tx_ops: BucketUpdate,
     ) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(net_id, |net: &mut Net| {
                 net.patch_rate_limiters(rx_bytes, rx_ops, tx_bytes, tx_ops)
             })?;
@@ -714,6 +739,8 @@ impl Vmm {
     pub fn balloon_config(&self) -> Result<BalloonConfig, VmmError> {
         let config = self
             .device_manager
+            .as_ref()
+            .unwrap()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.config())?;
         Ok(config)
     }
@@ -722,13 +749,15 @@ impl Vmm {
     pub fn latest_balloon_stats(&self) -> Result<BalloonStats, VmmError> {
         let stats = self
             .device_manager
+            .as_ref()
+            .unwrap()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.latest_stats())??;
         Ok(stats)
     }
 
     /// Updates configuration for the balloon device target size.
     pub fn update_balloon_config(&mut self, amount_mib: u32) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| {
                 dev.update_size(amount_mib)
             })??;
@@ -740,7 +769,7 @@ impl Vmm {
         &mut self,
         stats_polling_interval_s: u16,
     ) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| {
                 dev.update_stats_polling_interval(stats_polling_interval_s)
             })??;
@@ -749,14 +778,14 @@ impl Vmm {
 
     /// Returns the current state of the memory hotplug device.
     pub fn memory_hotplug_status(&self) -> Result<VirtioMemStatus, VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(VIRTIO_MEM_DEV_ID, |dev: &mut VirtioMem| dev.status())
             .map_err(VmmError::FindDeviceError)
     }
 
     /// Returns the current state of the memory hotplug device.
     pub fn update_memory_hotplug_size(&self, requested_size_mib: usize) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(VIRTIO_MEM_DEV_ID, |dev: &mut VirtioMem| {
                 dev.update_requested_size(requested_size_mib)
             })
@@ -766,7 +795,7 @@ impl Vmm {
 
     /// Starts the balloon free page hinting run
     pub fn start_balloon_hinting(&mut self, cmd: StartHintingCmd) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.start_hinting(cmd))??;
         Ok(())
     }
@@ -775,13 +804,15 @@ impl Vmm {
     pub fn get_balloon_hinting_status(&mut self) -> Result<HintingStatus, VmmError> {
         let status = self
             .device_manager
+            .as_ref()
+            .unwrap()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.get_hinting_status())??;
         Ok(status)
     }
 
     /// Stops the balloon free page hinting run
     pub fn stop_balloon_hinting(&mut self) -> Result<(), VmmError> {
-        self.device_manager
+        self.device_manager()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.stop_hinting())??;
         Ok(())
     }
@@ -864,39 +895,68 @@ impl MutEventSubscriber for Vmm {
         let source = event.fd();
         let event_set = event.event_set();
 
-        if source == self.vcpus_exit_evt.as_raw_fd() && event_set == EventSet::IN {
-            // Exit event handling should never do anything more than call 'self.stop()'.
-            let _ = self.vcpus_exit_evt.read();
+        match &*self.vm {
+            Vm::Kvm(_) => {
+                let exit_evt = self.vcpus_exit_evt.as_ref().expect("vcpus_exit_evt required for KVM");
+                if source == exit_evt.as_raw_fd() && event_set == EventSet::IN {
+                    // Exit event handling should never do anything more than call 'self.stop()'.
+                    let _ = exit_evt.read();
 
-            let exit_code = 'exit_code: {
-                // Query each vcpu for their exit_code.
-                for handle in &self.vcpus_handles {
-                    // Drain all vcpu responses that are pending from this vcpu until we find an
-                    // exit status.
-                    for response in handle.response_receiver().try_iter() {
-                        if let VcpuResponse::Exited(status) = response {
-                            // It could be that some vcpus exited successfully while others
-                            // errored out. Thus make sure that error exits from one vcpu always
-                            // takes precedence over "ok" exits
-                            if status != FcExitCode::Ok {
-                                break 'exit_code status;
+                    let exit_code = 'exit_code: {
+                        // Query each vcpu for their exit_code.
+                        for handle in &self.vcpus_handles {
+                            for response in handle.response_receiver().try_iter() {
+                                if let VcpuResponse::Exited(status) = response {
+                                    if status != FcExitCode::Ok {
+                                        break 'exit_code status;
+                                    }
+                                }
                             }
                         }
-                    }
+                        FcExitCode::Ok
+                    };
+                    self.stop(exit_code);
+                } else {
+                    error!("Spurious EventManager event for handler: Vmm");
                 }
-
-                // No CPUs exited with error status code, report "Ok"
-                FcExitCode::Ok
-            };
-            self.stop(exit_code);
-        } else {
-            error!("Spurious EventManager event for handler: Vmm");
+            }
+            #[cfg(feature = "nitro-enclave")]
+            Vm::Enclave(_) => {
+                // HUP means the enclave has exited.
+                if event_set.contains(EventSet::HANG_UP) || event_set.contains(EventSet::ERROR) {
+                    info!("Enclave exited (CID={:?})", self.enclave_cid);
+                    self.stop(FcExitCode::Ok);
+                } else if event_set.contains(EventSet::IN) {
+                    info!("Enclave fd readable event (CID={:?})", self.enclave_cid);
+                    self.stop(FcExitCode::Ok);
+                }
+            }
         }
     }
 
     fn init(&mut self, ops: &mut EventOps) {
-        if let Err(err) = ops.add(Events::new(&self.vcpus_exit_evt, EventSet::IN)) {
-            error!("Failed to register vmm exit event: {}", err);
+        match &*self.vm {
+            Vm::Kvm(_) => {
+                let exit_evt = self.vcpus_exit_evt.as_ref().expect("vcpus_exit_evt required for KVM");
+                if let Err(err) = ops.add(Events::new(exit_evt, EventSet::IN)) {
+                    error!("Failed to register vmm exit event: {}", err);
+                }
+            }
+            #[cfg(feature = "nitro-enclave")]
+            Vm::Enclave(enclave_vm) => {
+                let enclave_fd = enclave_vm.enclave_raw_fd();
+                // SAFETY: We use the raw fd value only for EventOps registration.
+                let event_fd = unsafe { vmm_sys_util::eventfd::EventFd::from_raw_fd(enclave_fd) };
+                if let Err(err) = ops.add(Events::new(
+                    &event_fd,
+                    EventSet::IN | EventSet::HANG_UP | EventSet::ERROR,
+                )) {
+                    error!("Failed to register enclave fd event: {}", err);
+                }
+                // Forget the EventFd wrapper so it doesn't close the real fd.
+                std::mem::forget(event_fd);
+                self.instance_info.state = VmState::Running;
+            }
         }
     }
 }

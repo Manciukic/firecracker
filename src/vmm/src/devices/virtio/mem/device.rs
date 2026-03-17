@@ -728,7 +728,7 @@ pub(crate) mod test_utils {
             .unwrap(),
             mib_to_bytes(128),
         );
-        let vm = Arc::new(vm);
+        let vm = Arc::new(Vm::Kvm(vm));
         VirtioMem::new(vm, addr, 1024, 2, 128).unwrap()
     }
 }
@@ -771,7 +771,7 @@ mod tests {
     #[test]
     fn test_from_state() {
         let (_, vm) = setup_vm_with_memory(0x1000);
-        let vm = Arc::new(vm);
+        let vm = Arc::new(Vm::Kvm(vm));
         let queues = vec![Queue::new(FIRECRACKER_MAX_QUEUE_SIZE); MEM_NUM_QUEUES];
         let addr = 512 << 30;
         let region_size_mib = 2048;

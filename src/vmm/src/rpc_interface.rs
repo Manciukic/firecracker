@@ -14,8 +14,6 @@ use super::{FcExitCode, Vmm, VmmError, VmmShutdown};
 use crate::EventManager;
 use crate::builder::StartMicrovmError;
 #[cfg(feature = "nitro-enclave")]
-use crate::nitro_enclave::EnclaveVmm;
-#[cfg(feature = "nitro-enclave")]
 use crate::vmm_config::enclave::EnclaveConfig;
 use crate::cpu_config::templates::{CustomCpuTemplate, GuestConfigError};
 use crate::devices::virtio::balloon::device::{HintingStatus, StartHintingCmd};
@@ -278,11 +276,8 @@ pub struct PrebootApiController<'a> {
     instance_info: InstanceInfo,
     vm_resources: &'a mut VmResources,
     event_manager: &'a mut EventManager,
-    /// The [`Vmm`] object constructed through requests
-    pub built_vmm: Option<Arc<Mutex<Vmm>>>,
-    /// The enclave VMM object constructed through requests (when enclave config is set).
-    #[cfg(feature = "nitro-enclave")]
-    pub built_enclave_vmm: Option<Arc<Mutex<EnclaveVmm>>>,
+    /// The [`Vmm`] object constructed through requests (KVM or Enclave).
+    pub built_vmm: Option<BuiltVmm>,
     // Configuring boot specific resources will set this to true.
     // Loading from snapshot will not be allowed once this is true.
     boot_path: bool,
@@ -294,15 +289,13 @@ pub struct PrebootApiController<'a> {
 // TODO Remove when `EventManager` implements `std::fmt::Debug`.
 impl fmt::Debug for PrebootApiController<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut s = f.debug_struct("PrebootApiController");
-        s.field("seccomp_filters", &self.seccomp_filters)
+        f.debug_struct("PrebootApiController")
+            .field("seccomp_filters", &self.seccomp_filters)
             .field("instance_info", &self.instance_info)
             .field("vm_resources", &self.vm_resources)
             .field("event_manager", &"?")
-            .field("built_vmm", &self.built_vmm);
-        #[cfg(feature = "nitro-enclave")]
-        s.field("built_enclave_vmm", &self.built_enclave_vmm);
-        s.field("boot_path", &self.boot_path)
+            .field("built_vmm", &self.built_vmm)
+            .field("boot_path", &self.boot_path)
             .field("fatal_error", &self.fatal_error)
             .finish()
     }
@@ -324,30 +317,24 @@ pub type ApiRequest = Box<VmmAction>;
 /// Shorthand type for a response containing a boxed Result.
 pub type ApiResponse = Box<Result<VmmData, VmmActionError>>;
 
-/// Wraps either a KVM-based Vmm or a Nitro Enclave Vmm.
-#[derive(Debug)]
-pub enum BuiltVmm {
-    /// Standard KVM-based microVM.
-    MicroVm(Arc<Mutex<Vmm>>),
-    /// Nitro Enclave-based VM.
-    #[cfg(feature = "nitro-enclave")]
-    Enclave(Arc<Mutex<EnclaveVmm>>),
-}
+/// A built VMM instance — always `Arc<Mutex<Vmm>>` for both KVM and Enclave.
+pub type BuiltVmm = Arc<Mutex<Vmm>>;
 
-impl BuiltVmm {
-    /// Returns the shutdown exit code by delegating to the underlying VMM type.
-    pub fn shutdown_exit_code(&self) -> Option<FcExitCode> {
-        match self {
-            BuiltVmm::MicroVm(vmm) => vmm.lock().unwrap().shutdown_exit_code(),
-            #[cfg(feature = "nitro-enclave")]
-            BuiltVmm::Enclave(enclave_vmm) => enclave_vmm.lock().unwrap().shutdown_exit_code(),
-        }
-    }
+/// Extension methods for `BuiltVmm`.
+pub trait BuiltVmmExt {
+    /// Returns the shutdown exit code.
+    fn shutdown_exit_code(&self) -> Option<FcExitCode>;
 
     /// Run the event manager loop until the VMM shuts down.
-    ///
-    /// Returns `Ok(())` on clean shutdown, or `Err(exit_code)` on error exit.
-    pub fn run_event_loop(
+    fn run_event_loop(&self, event_manager: &mut EventManager) -> Result<(), FcExitCode>;
+}
+
+impl BuiltVmmExt for BuiltVmm {
+    fn shutdown_exit_code(&self) -> Option<FcExitCode> {
+        self.lock().unwrap().shutdown_exit_code()
+    }
+
+    fn run_event_loop(
         &self,
         event_manager: &mut EventManager,
     ) -> Result<(), FcExitCode> {
@@ -392,8 +379,6 @@ impl<'a> PrebootApiController<'a> {
             vm_resources,
             event_manager,
             built_vmm: None,
-            #[cfg(feature = "nitro-enclave")]
-            built_enclave_vmm: None,
             boot_path: false,
             fatal_error: None,
         }
@@ -689,14 +674,14 @@ impl<'a> PrebootApiController<'a> {
             .as_ref()
             .expect("enclave config checked before calling start_enclave")
             .clone();
-        let enclave_vmm = crate::nitro_enclave::enclave_builder::build_and_boot_enclave(
+        let vmm = crate::nitro_enclave::enclave_builder::build_and_boot_enclave(
             &self.instance_info,
             self.vm_resources,
             &enclave_config,
             self.event_manager,
         )
         .map_err(VmmActionError::Enclave)?;
-        self.built_enclave_vmm = Some(enclave_vmm);
+        self.built_vmm = Some(vmm);
         Ok(VmmData::Empty)
     }
 
@@ -709,26 +694,13 @@ impl<'a> PrebootApiController<'a> {
 
     /// Check whether a VMM (microVM or enclave) has been built.
     fn is_built(&self) -> bool {
-        if self.built_vmm.is_some() {
-            return true;
-        }
-        #[cfg(feature = "nitro-enclave")]
-        if self.built_enclave_vmm.is_some() {
-            return true;
-        }
-        false
+        self.built_vmm.is_some()
     }
 
     /// Consume the controller and return the built VMM instance.
     fn into_built_vmm(self) -> Result<BuiltVmm, BuildMicrovmFromRequestsError> {
-        if let Some(vmm) = self.built_vmm {
-            return Ok(BuiltVmm::MicroVm(vmm));
-        }
-        #[cfg(feature = "nitro-enclave")]
-        if let Some(enclave_vmm) = self.built_enclave_vmm {
-            return Ok(BuiltVmm::Enclave(enclave_vmm));
-        }
-        unreachable!("into_built_vmm called but nothing was built")
+        self.built_vmm
+            .ok_or_else(|| unreachable!("into_built_vmm called but nothing was built"))
     }
 
     // On success, this command will end the pre-boot stage and this controller
@@ -789,6 +761,22 @@ impl RuntimeApiController {
     /// Handles the incoming runtime `VmmAction` request and provides a response for it.
     pub fn handle_request(&mut self, request: VmmAction) -> Result<VmmData, VmmActionError> {
         use self::VmmAction::*;
+
+        // For enclave VMs, reject KVM-specific operations early.
+        #[cfg(feature = "nitro-enclave")]
+        if self.is_enclave() {
+            match &request {
+                // These info queries work for both KVM and Enclave.
+                GetVmInstanceInfo | GetVmmVersion | GetVmMachineConfig | FlushMetrics => {}
+                // Everything else is KVM-only.
+                other => {
+                    return Err(VmmActionError::NotSupported(format!(
+                        "{other:?} is not supported for enclave VMs"
+                    )));
+                }
+            }
+        }
+
         match request {
             // Supported operations allowed post-boot.
             CreateSnapshot(snapshot_create_cfg) => self.create_snapshot(&snapshot_create_cfg),
@@ -933,6 +921,12 @@ impl RuntimeApiController {
     /// Creates a new `RuntimeApiController`.
     pub fn new(vmm: Arc<Mutex<Vmm>>) -> Self {
         Self { vmm }
+    }
+
+    /// Returns true if the VMM is running an enclave (not a KVM VM).
+    #[cfg(feature = "nitro-enclave")]
+    fn is_enclave(&self) -> bool {
+        self.vmm.lock().expect("Poisoned lock").vm.is_enclave()
     }
 
     /// Pauses the microVM by pausing the vCPUs.

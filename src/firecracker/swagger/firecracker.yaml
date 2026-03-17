@@ -1336,11 +1336,12 @@ definitions:
         type: string
       state:
         description:
-          The current detailed state (Not started, Running, Paused) of the Firecracker instance.
+          The current detailed state (Not started, Booting, Running, Paused) of the Firecracker instance.
           This value is read-only for the control-plane.
         type: string
         enum:
           - Not started
+          - Booting
           - Running
           - Paused
       vmm_version:

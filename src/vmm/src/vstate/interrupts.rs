@@ -104,7 +104,7 @@ impl MsixVectorGroup {
     /// Enable the MSI-X vector group
     pub fn enable(&self) -> Result<(), InterruptError> {
         for route in &self.vectors {
-            route.enable(&self.vm.common.fd)?;
+            route.enable(&self.vm.as_kvm().common.fd)?;
         }
 
         Ok(())
@@ -113,7 +113,7 @@ impl MsixVectorGroup {
     /// Disable the MSI-X vector group
     pub fn disable(&self) -> Result<(), InterruptError> {
         for route in &self.vectors {
-            route.disable(&self.vm.common.fd)?;
+            route.disable(&self.vm.as_kvm().common.fd)?;
         }
 
         Ok(())
@@ -148,12 +148,12 @@ impl MsixVectorGroup {
             // KVM_SET_GSI_ROUTING. So, call [`disable()`] to unregister the interrupt file
             // descriptor before passing the interrupt routes to KVM
             if masked {
-                vector.disable(&self.vm.common.fd)?;
+                vector.disable(&self.vm.as_kvm().common.fd)?;
             }
 
-            self.vm.register_msi(vector, masked, msi_config)?;
+            self.vm.as_kvm().register_msi(vector, masked, msi_config)?;
             if set_gsi {
-                self.vm
+                self.vm.as_kvm()
                     .set_gsi_routes()
                     .map_err(|err| std::io::Error::other(format!("MSI-X update: {err}")))?
             }
@@ -162,7 +162,7 @@ impl MsixVectorGroup {
             // panic on kernel which does not have commit a80ced6ea514
             // (KVM: SVM: fix panic on out-of-bounds guest IRQ).
             if !masked {
-                vector.enable(&self.vm.common.fd)?;
+                vector.enable(&self.vm.as_kvm().common.fd)?;
             }
 
             return Ok(());

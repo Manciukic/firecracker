@@ -200,7 +200,7 @@ impl MMIODeviceManager {
                 .map_err(MmioError::RegisterIrqFd)?;
         }
 
-        vm.common.mmio_bus.insert(
+        vm.common().mmio_bus.insert(
             device.inner.clone(),
             device.resources.addr,
             device.resources.len,
@@ -302,7 +302,7 @@ impl MMIODeviceManager {
             sub_id: None,
         };
 
-        vm.common.mmio_bus.insert(
+        vm.common().mmio_bus.insert(
             device.inner.clone(),
             device.resources.addr,
             device.resources.len,
@@ -356,7 +356,7 @@ impl MMIODeviceManager {
             sub_id: None,
         };
 
-        vm.common.mmio_bus.insert(
+        vm.common().mmio_bus.insert(
             device.inner.clone(),
             device.resources.addr,
             device.resources.len,
@@ -461,6 +461,7 @@ pub(crate) mod tests {
     use crate::test_utils::multi_region_mem_raw;
     use crate::vstate::kvm::Kvm;
     use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
+    use crate::vstate::vm::ArchVm;
     use crate::{Vm, arch, impl_device_type};
 
     const QUEUE_SIZES: &[u16] = &[64];
@@ -594,8 +595,9 @@ pub(crate) mod tests {
         let start_addr2 = GuestAddress(0x1000);
         let guest_mem = multi_region_mem_raw(&[(start_addr1, 0x1000), (start_addr2, 0x1000)]);
         let kvm = Kvm::new(vec![]).expect("Cannot create Kvm");
-        let mut vm = Vm::new(&kvm).unwrap();
+        let mut vm = ArchVm::new(&kvm).unwrap();
         vm.register_dram_memory_regions(guest_mem).unwrap();
+        let mut vm = Vm::Kvm(vm);
         let mut device_manager = MMIODeviceManager::new();
 
         let mut cmdline = kernel_cmdline::Cmdline::new(4096).unwrap();
@@ -648,8 +650,9 @@ pub(crate) mod tests {
         let start_addr2 = GuestAddress(0x1000);
         let guest_mem = multi_region_mem_raw(&[(start_addr1, 0x1000), (start_addr2, 0x1000)]);
         let kvm = Kvm::new(vec![]).expect("Cannot create Kvm");
-        let mut vm = Vm::new(&kvm).unwrap();
+        let mut vm = ArchVm::new(&kvm).unwrap();
         vm.register_dram_memory_regions(guest_mem).unwrap();
+        let mut vm = Vm::Kvm(vm);
         let mut device_manager = MMIODeviceManager::new();
 
         let mut cmdline = kernel_cmdline::Cmdline::new(4096).unwrap();
@@ -704,8 +707,9 @@ pub(crate) mod tests {
         let start_addr2 = GuestAddress(0x1000);
         let guest_mem = multi_region_mem_raw(&[(start_addr1, 0x1000), (start_addr2, 0x1000)]);
         let kvm = Kvm::new(vec![]).expect("Cannot create Kvm");
-        let mut vm = Vm::new(&kvm).unwrap();
+        let mut vm = ArchVm::new(&kvm).unwrap();
         vm.register_dram_memory_regions(guest_mem).unwrap();
+        let mut vm = Vm::Kvm(vm);
 
         #[cfg(target_arch = "x86_64")]
         vm.setup_irqchip().unwrap();

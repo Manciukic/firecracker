@@ -95,7 +95,7 @@ impl PciDevices {
             "Inserting MMIO BAR region: {:#x}:{:#x}",
             virtio_device_locked.bar_address, CAPABILITY_BAR_SIZE
         );
-        vm.common.mmio_bus.insert(
+        vm.common().mmio_bus.insert(
             virtio_device.clone(),
             virtio_device_locked.bar_address,
             CAPABILITY_BAR_SIZE,
@@ -661,7 +661,7 @@ mod tests {
         {
             let mut event_manager = EventManager::new().expect("Unable to create EventManager");
             let mut vmm = default_vmm();
-            vmm.device_manager.enable_pci(&vmm.vm).unwrap();
+            vmm.device_manager.as_mut().unwrap().enable_pci(&vmm.vm).unwrap();
             let mut cmdline = default_kernel_cmdline();
 
             // Add a balloon device.
@@ -733,7 +733,7 @@ mod tests {
                 memory_hotplug_config,
             );
 
-            let device_state = vmm.device_manager.save();
+            let device_state = vmm.device_manager.as_ref().unwrap().save();
             serialized_data = bitcode::serialize(&device_state).unwrap();
         }
 

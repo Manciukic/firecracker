@@ -10,6 +10,8 @@ pub enum VmState {
     /// Vm not started (yet)
     #[default]
     NotStarted,
+    /// Vm is booting (enclave started, awaiting heartbeat)
+    Booting,
     /// Vm is Paused
     Paused,
     /// Vm is running
@@ -20,6 +22,7 @@ impl Display for VmState {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             VmState::NotStarted => write!(f, "Not started"),
+            VmState::Booting => write!(f, "Booting"),
             VmState::Paused => write!(f, "Paused"),
             VmState::Running => write!(f, "Running"),
         }

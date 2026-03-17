@@ -181,6 +181,8 @@ pub fn create_snapshot(
     // do it here is that we don't mark pages as dirty during runtime
     // for queue objects.
     vmm.device_manager
+        .as_ref()
+        .unwrap()
         .mark_virtio_queue_memory_dirty(vmm.vm.guest_memory());
 
     Ok(())
@@ -722,7 +724,7 @@ mod tests {
     #[test]
     fn test_microvm_state_snapshot() {
         let vmm = default_vmm_with_devices();
-        let states = vmm.device_manager.save();
+        let states = vmm.device_manager.as_ref().unwrap().save();
 
         // Only checking that all devices are saved, actual device state
         // is tested by that device's tests.

@@ -26,7 +26,7 @@ use crate::vcpu::{VcpuConfig, VcpuError};
 use crate::vstate::bus::Bus;
 use crate::vstate::memory::{Address, GuestMemoryMmap};
 use crate::vstate::vcpu::VcpuEmulation;
-use crate::vstate::vm::Vm;
+use crate::vstate::vm::ArchVm;
 
 /// Errors thrown while setting aarch64 registers.
 #[derive(Debug, PartialEq, Eq, thiserror::Error, displaydoc::Display)]
@@ -133,7 +133,7 @@ impl KvmVcpu {
     ///
     /// * `index` - Represents the 0-based CPU index between [0, max vcpus).
     /// * `vm` - The vm to which this vcpu will get attached.
-    pub fn new(index: u8, vm: &Vm) -> Result<Self, KvmVcpuError> {
+    pub fn new(index: u8, vm: &ArchVm) -> Result<Self, KvmVcpuError> {
         let kvm_vcpu = vm
             .fd()
             .create_vcpu(index.into())
@@ -567,14 +567,14 @@ mod tests {
     use crate::vstate::vm::Vm;
     use crate::vstate::vm::tests::setup_vm_with_memory;
 
-    fn setup_vcpu(mem_size: usize) -> (Kvm, Vm, KvmVcpu) {
+    fn setup_vcpu(mem_size: usize) -> (Kvm, ArchVm, KvmVcpu) {
         let (kvm, mut vm, mut vcpu) = setup_vcpu_no_init(mem_size);
         vcpu.init(&[]).unwrap();
         vm.setup_irqchip(1).unwrap();
         (kvm, vm, vcpu)
     }
 
-    fn setup_vcpu_no_init(mem_size: usize) -> (Kvm, Vm, KvmVcpu) {
+    fn setup_vcpu_no_init(mem_size: usize) -> (Kvm, ArchVm, KvmVcpu) {
         let (kvm, vm) = setup_vm_with_memory(mem_size);
         let vcpu = KvmVcpu::new(0, &vm).unwrap();
 

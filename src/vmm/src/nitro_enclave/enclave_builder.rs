@@ -9,20 +9,20 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use event_manager::SubscriberOps;
+
 use crate::logger::info;
 use crate::nitro_enclave::eif;
 use crate::nitro_enclave::enclave_vcpu;
 use crate::nitro_enclave::enclave_vm::EnclaveVm;
 use crate::nitro_enclave::heartbeat;
 use crate::nitro_enclave::vsock_console::VsockConsole;
-use crate::nitro_enclave::EnclaveVmm;
 use crate::resources::VmResources;
 use crate::utils::mib_to_bytes;
 use crate::vmm_config::enclave::EnclaveConfig;
-use crate::vmm_config::instance_info::InstanceInfo;
-use event_manager::SubscriberOps;
-
-use crate::EventManager;
+use crate::vmm_config::instance_info::{InstanceInfo, VmState};
+use crate::vstate::vm::Vm;
+use crate::{EventManager, Vmm};
 
 /// Errors from building and booting an enclave.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -53,7 +53,7 @@ pub fn build_and_boot_enclave(
     vm_resources: &VmResources,
     enclave_config: &EnclaveConfig,
     event_manager: &mut EventManager,
-) -> Result<Arc<Mutex<EnclaveVmm>>, EnclaveBuilderError> {
+) -> Result<Arc<Mutex<Vmm>>, EnclaveBuilderError> {
     // 1. Get boot config
     let _boot_config = vm_resources
         .boot_source
@@ -97,8 +97,6 @@ pub fn build_and_boot_enclave(
     info!("Added {} vCPUs: {:?}", cpu_ids.len(), cpu_ids);
 
     // 5. Allocate hugepage memory, copy EIF, then donate to NE.
-    //    The EIF must be written before NE_SET_USER_MEMORY_REGION because
-    //    that ioctl donates the pages and userspace loses access.
     let mem_size = mib_to_bytes(vm_resources.machine_config.mem_size_mib);
     enclave_vm.load_and_add_memory(mem_size, vm_resources.machine_config.huge_pages, &eif_data)?;
     info!(
@@ -111,17 +109,7 @@ pub fn build_and_boot_enclave(
     let assigned_cid = enclave_vm.start(enclave_config.debug_mode, cid)?;
     info!("Enclave started with CID={assigned_cid}");
 
-    // 8. Heartbeat — the enclave sends 0xB7 on vsock port 9000 at boot.
-    //    Register as an async subscriber so it doesn't block startup.
-    match heartbeat::Heartbeat::new() {
-        Ok(hb) => {
-            event_manager.add_subscriber(Arc::new(Mutex::new(hb)));
-            info!("Heartbeat listener registered on vsock port 9000");
-        }
-        Err(e) => info!("Heartbeat setup failed (non-fatal): {e}"),
-    }
-
-    // 9. Debug mode: vsock console
+    // 8. Debug mode: vsock console
     if enclave_config.debug_mode {
         info!("Starting vsock console for CID={assigned_cid}");
         let console =
@@ -129,15 +117,36 @@ pub fn build_and_boot_enclave(
         event_manager.add_subscriber(Arc::new(Mutex::new(console)));
     }
 
-    // 10. Build EnclaveVmm and register with event manager
-    let enclave_vmm = EnclaveVmm::new(
-        enclave_vm,
-        assigned_cid,
-        enclave_config.debug_mode,
-        instance_info.clone(),
-    );
-    let enclave_vmm = Arc::new(Mutex::new(enclave_vmm));
-    event_manager.add_subscriber(enclave_vmm.clone());
+    // 9. Build unified Vmm with Vm::Enclave and register with event manager.
+    //    Initial state is Booting — transitions to Running on heartbeat.
+    let mut info = instance_info.clone();
+    info.state = VmState::Booting;
+    let vmm = Vmm {
+        instance_info: info,
+        machine_config: vm_resources.machine_config.clone(),
+        boot_source_config: vm_resources.boot_source.config.clone(),
+        shutdown_exit_code: None,
+        vm: Arc::new(Vm::Enclave(enclave_vm)),
+        kvm: None,
+        uffd: None,
+        vcpus_handles: Vec::new(),
+        vcpus_exit_evt: None,
+        device_manager: None,
+        enclave_cid: Some(assigned_cid),
+        enclave_debug_mode: enclave_config.debug_mode,
+    };
+    let vmm = Arc::new(Mutex::new(vmm));
+    event_manager.add_subscriber(vmm.clone());
 
-    Ok(enclave_vmm)
+    // 10. Heartbeat — the enclave sends 0xB7 on vsock port 9000 at boot.
+    //     On success, transitions Vmm state from Booting → Running.
+    match heartbeat::Heartbeat::new(vmm.clone()) {
+        Ok(hb) => {
+            event_manager.add_subscriber(Arc::new(Mutex::new(hb)));
+            info!("Heartbeat listener registered on vsock port 9000");
+        }
+        Err(e) => info!("Heartbeat setup failed (non-fatal): {e}"),
+    }
+
+    Ok(vmm)
 }

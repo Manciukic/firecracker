@@ -564,8 +564,7 @@ pub enum BuildFromJsonError {
     BuildEnclave(vmm::nitro_enclave::enclave_builder::EnclaveBuilderError),
 }
 
-/// Re-export BuiltVmm as VmmInstance for use in this crate.
-use vmm::rpc_interface::BuiltVmm as VmmInstance;
+use vmm::rpc_interface::{BuiltVmm as VmmInstance, BuiltVmmExt};
 
 // Configure and start a microVM as described by the command-line JSON.
 #[allow(clippy::too_many_arguments)]
@@ -587,7 +586,7 @@ fn build_microvm_from_json(
 
     #[cfg(feature = "nitro-enclave")]
     if let Some(ref enclave_config) = vm_resources.enclave {
-        let enclave_vmm = vmm::nitro_enclave::enclave_builder::build_and_boot_enclave(
+        let vmm = vmm::nitro_enclave::enclave_builder::build_and_boot_enclave(
             &instance_info,
             &vm_resources,
             enclave_config,
@@ -596,7 +595,7 @@ fn build_microvm_from_json(
         .map_err(BuildFromJsonError::BuildEnclave)?;
 
         info!("Successfully started enclave that was configured from one single json");
-        return Ok(VmmInstance::Enclave(enclave_vmm));
+        return Ok(vmm);
     }
 
     let vmm = vmm::builder::build_and_boot_microvm(
@@ -609,7 +608,7 @@ fn build_microvm_from_json(
 
     info!("Successfully started microvm that was configured from one single json");
 
-    Ok(VmmInstance::MicroVm(vmm))
+    Ok(vmm)
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]

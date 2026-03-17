@@ -78,6 +78,7 @@ mod tests {
 
     use super::*;
     use crate::arch::Kvm;
+    use crate::vstate::vm::ArchVm;
     use crate::devices::virtio::device::VirtioDevice;
     use crate::devices::virtio::test_utils::default_mem;
 
@@ -96,7 +97,7 @@ mod tests {
         let pmem = Pmem::new(config).unwrap();
         let guest_mem = default_mem();
         let kvm = Kvm::new(vec![]).unwrap();
-        let vm = Vm::new(&kvm).unwrap();
+        let vm = Vm::Kvm(ArchVm::new(&kvm).unwrap());
 
         // Save the block device.
         let pmem_state = pmem.save();
