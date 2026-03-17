@@ -77,10 +77,7 @@ impl EnclaveVm {
     pub fn add_vcpu(&mut self, cpu_id: u32) -> Result<(), EnclaveVmError> {
         self.enclave_fd
             .add_vcpu(cpu_id)
-            .map_err(|e| EnclaveVmError::AddVcpu {
-                cpu_id,
-                source: e,
-            })?;
+            .map_err(|e| EnclaveVmError::AddVcpu { cpu_id, source: e })?;
         self.vcpu_ids.push(cpu_id);
         Ok(())
     }

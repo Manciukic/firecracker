@@ -51,15 +51,29 @@ def _build_hello_eif():
     try:
         # Ensure hello Docker image exists
         subprocess.run(
-            ["docker", "build", "-t", "hello:latest",
-             "/usr/share/nitro_enclaves/examples/hello/"],
-            check=True, capture_output=True, timeout=60,
+            [
+                "docker",
+                "build",
+                "-t",
+                "hello:latest",
+                "/usr/share/nitro_enclaves/examples/hello/",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=60,
         )
         subprocess.run(
-            ["nitro-cli", "build-enclave",
-             "--docker-uri", "hello:latest",
-             "--output-file", str(EIF_PATH)],
-            check=True, capture_output=True, timeout=120,
+            [
+                "nitro-cli",
+                "build-enclave",
+                "--docker-uri",
+                "hello:latest",
+                "--output-file",
+                str(EIF_PATH),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -75,9 +89,7 @@ requires_ne = pytest.mark.skipif(
 def _get_kernel_path():
     """Find a kernel image in the artifact directory (for non-NE tests)."""
     candidates = sorted(ARTIFACT_DIR.glob("vmlinux-*"))
-    candidates = [
-        c for c in candidates if not c.name.endswith((".config", ".debug"))
-    ]
+    candidates = [c for c in candidates if not c.name.endswith((".config", ".debug"))]
     return candidates[0] if candidates else None
 
 
@@ -143,9 +155,9 @@ def test_enclave_state_booting_to_running(microvm_factory):
     # Immediately after start, state should be "Booting"
     response = vm.api.describe.get()
     initial_state = response.json()["state"]
-    assert initial_state == "Booting", (
-        f"Expected initial state 'Booting', got '{initial_state}'"
-    )
+    assert (
+        initial_state == "Booting"
+    ), f"Expected initial state 'Booting', got '{initial_state}'"
 
     # Poll until state transitions to "Running" (heartbeat received)
     deadline = time.time() + 30
@@ -157,9 +169,9 @@ def test_enclave_state_booting_to_running(microvm_factory):
             break
         time.sleep(0.5)
 
-    assert state == "Running", (
-        f"Expected state 'Running' after heartbeat, got '{state}'"
-    )
+    assert (
+        state == "Running"
+    ), f"Expected state 'Running' after heartbeat, got '{state}'"
 
     vm.kill()
 
@@ -312,12 +324,12 @@ def test_enclave_eif_build_from_kernel(microvm_factory):
     # Verify the EIF was built (not loaded from a pre-built file) and
     # the enclave started by checking the Firecracker log.
     log = vm.log_data
-    assert "Building EIF from kernel=" in log, (
-        f"Expected 'Building EIF from kernel=' in log, got:\n{log}"
-    )
-    assert "Enclave started with CID=" in log, (
-        f"Expected 'Enclave started with CID=' in log, got:\n{log}"
-    )
+    assert (
+        "Building EIF from kernel=" in log
+    ), f"Expected 'Building EIF from kernel=' in log, got:\n{log}"
+    assert (
+        "Enclave started with CID=" in log
+    ), f"Expected 'Enclave started with CID=' in log, got:\n{log}"
 
     # Poll until state transitions to "Running" (heartbeat received)
     deadline = time.time() + 30
@@ -329,10 +341,8 @@ def test_enclave_eif_build_from_kernel(microvm_factory):
             break
         time.sleep(0.5)
 
-    assert state == "Running", (
-        f"Expected state 'Running' after heartbeat, got '{state}'"
-    )
+    assert (
+        state == "Running"
+    ), f"Expected state 'Running' after heartbeat, got '{state}'"
 
     vm.kill()
-
-

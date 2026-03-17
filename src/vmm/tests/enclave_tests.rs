@@ -197,19 +197,17 @@ fn test_cpu_pool_dedup() {
 #[test]
 #[ignore]
 fn test_build_and_boot_enclave() {
+    use vmm::EventManager;
     use vmm::nitro_enclave::enclave_builder;
     use vmm::vmm_config::boot_source::BootSourceConfig;
     use vmm::vmm_config::instance_info::{InstanceInfo, VmState};
     use vmm::vmm_config::machine_config::MachineConfigUpdate;
-    use vmm::EventManager;
 
     // This test expects kernel and initrd at these paths
     let kernel_path = "/tmp/vmlinux";
     let initrd_path = "/tmp/initrd.img";
 
-    if !std::path::Path::new(kernel_path).exists()
-        || !std::path::Path::new(initrd_path).exists()
-    {
+    if !std::path::Path::new(kernel_path).exists() || !std::path::Path::new(initrd_path).exists() {
         eprintln!("Skipping test: kernel or initrd not found");
         return;
     }

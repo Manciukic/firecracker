@@ -138,7 +138,13 @@ impl NitroEnclaveFd {
     pub fn create_vm(&self) -> std::io::Result<OwnedFd> {
         let mut slot: u64 = 0;
         // SAFETY: NE_CREATE_VM ioctl on a valid NE device fd.
-        let ret = unsafe { ne_ioctl(self.fd.as_raw_fd(), NE_CREATE_VM, (&mut slot as *mut u64).cast()) };
+        let ret = unsafe {
+            ne_ioctl(
+                self.fd.as_raw_fd(),
+                NE_CREATE_VM,
+                (&mut slot as *mut u64).cast(),
+            )
+        };
         if ret < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -164,7 +170,13 @@ impl EnclaveFd {
     pub fn add_vcpu(&self, cpu_id: u32) -> std::io::Result<()> {
         let mut id = cpu_id;
         // SAFETY: NE_ADD_VCPU ioctl on a valid enclave fd.
-        let ret = unsafe { ne_ioctl(self.fd.as_raw_fd(), NE_ADD_VCPU, (&mut id as *mut u32).cast()) };
+        let ret = unsafe {
+            ne_ioctl(
+                self.fd.as_raw_fd(),
+                NE_ADD_VCPU,
+                (&mut id as *mut u32).cast(),
+            )
+        };
         if ret < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -192,11 +204,7 @@ impl EnclaveFd {
     }
 
     /// Set a user memory region for the enclave.
-    pub fn set_user_memory_region(
-        &self,
-        addr: u64,
-        size: u64,
-    ) -> std::io::Result<()> {
+    pub fn set_user_memory_region(&self, addr: u64, size: u64) -> std::io::Result<()> {
         let mut region = NeUserMemoryRegion {
             flags: 0,
             memory_size: size,

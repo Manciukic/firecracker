@@ -237,8 +237,8 @@ impl PortIODeviceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vstate::vm::tests::setup_vm_with_memory;
     use crate::vstate::vm::Vm;
+    use crate::vstate::vm::tests::setup_vm_with_memory;
 
     #[test]
     fn test_register_legacy_devices() {

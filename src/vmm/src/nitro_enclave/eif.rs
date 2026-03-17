@@ -223,7 +223,11 @@ mod tests {
             EIF_SECTION_KERNEL
         );
         // Verify CRC32 is valid (recompute excluding CRC field)
-        let stored_crc = u32::from_be_bytes(eif[EIF_CRC32_OFFSET..EIF_CRC32_OFFSET + 4].try_into().unwrap());
+        let stored_crc = u32::from_be_bytes(
+            eif[EIF_CRC32_OFFSET..EIF_CRC32_OFFSET + 4]
+                .try_into()
+                .unwrap(),
+        );
         let mut hasher = Crc32Hasher::new();
         hasher.update(&eif[..EIF_CRC32_OFFSET]);
         hasher.update(&eif[EIF_CRC32_OFFSET + 4..]);

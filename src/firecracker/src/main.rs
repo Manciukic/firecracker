@@ -560,7 +560,7 @@ pub enum BuildFromJsonError {
     /// Could not Start MicroVM from one single json: {0}
     StartMicroVM(StartMicrovmError),
     /// Could not build enclave from one single json: {0}
-        BuildEnclave(vmm::nitro_enclave::enclave_builder::EnclaveBuilderError),
+    BuildEnclave(vmm::nitro_enclave::enclave_builder::EnclaveBuilderError),
 }
 
 // Configure and start a microVM as described by the command-line JSON.
@@ -581,7 +581,7 @@ fn build_microvm_from_json(
     vm_resources.boot_timer = boot_timer_enabled;
     vm_resources.pci_enabled = pci_enabled;
 
-        if let Some(ref enclave_config) = vm_resources.enclave {
+    if let Some(ref enclave_config) = vm_resources.enclave {
         let vmm = vmm::nitro_enclave::enclave_builder::build_and_boot_enclave(
             &instance_info,
             &vm_resources,

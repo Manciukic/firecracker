@@ -99,7 +99,7 @@ pub struct VmmConfig {
     #[serde(skip)]
     pub serial_config: Option<SerialConfig>,
     pub memory_hotplug: Option<MemoryHotplugConfig>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enclave: Option<crate::vmm_config::enclave::EnclaveConfig>,
 }
 
@@ -138,7 +138,7 @@ pub struct VmResources {
     /// Where serial console output should be written to
     pub serial_out_path: Option<PathBuf>,
     /// Enclave configuration (when using Nitro Enclaves mode).
-        pub enclave: Option<crate::vmm_config::enclave::EnclaveConfig>,
+    pub enclave: Option<crate::vmm_config::enclave::EnclaveConfig>,
 }
 
 impl VmResources {
@@ -228,7 +228,7 @@ impl VmResources {
             resources.set_memory_hotplug_config(memory_hotplug_config)?;
         }
 
-                {
+        {
             resources.enclave = vmm_config.enclave;
         }
 
@@ -546,7 +546,7 @@ impl From<&VmResources> for VmmConfig {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots.
             serial_config: None,
             memory_hotplug: resources.memory_hotplug.clone(),
-                        enclave: resources.enclave.clone(),
+            enclave: resources.enclave.clone(),
         }
     }
 }
@@ -661,7 +661,7 @@ mod tests {
             pci_enabled: false,
             serial_out_path: None,
             memory_hotplug: Default::default(),
-                        enclave: None,
+            enclave: None,
         }
     }
 

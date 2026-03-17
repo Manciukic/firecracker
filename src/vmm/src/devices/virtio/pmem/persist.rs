@@ -78,9 +78,9 @@ mod tests {
 
     use super::*;
     use crate::arch::Kvm;
-    use crate::vstate::vm::ArchVm;
     use crate::devices::virtio::device::VirtioDevice;
     use crate::devices::virtio::test_utils::default_mem;
+    use crate::vstate::vm::ArchVm;
 
     #[test]
     fn test_persistence() {

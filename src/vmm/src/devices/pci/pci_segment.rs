@@ -20,12 +20,12 @@ use uuid::Uuid;
 use vm_allocator::AddressAllocator;
 
 use crate::arch::{ArchVm, PCI_MMCONFIG_START, PCI_MMIO_CONFIG_SIZE_PER_SEGMENT};
-use crate::vstate::vm::Vm;
 #[cfg(target_arch = "x86_64")]
 use crate::pci::bus::{PCI_CONFIG_IO_PORT, PCI_CONFIG_IO_PORT_SIZE};
 use crate::pci::bus::{PciBus, PciConfigIo, PciConfigMmio, PciRoot, PciRootError};
 use crate::vstate::bus::{BusDeviceSync, BusError};
 use crate::vstate::resources::ResourceAllocator;
+use crate::vstate::vm::Vm;
 
 pub struct PciSegment {
     pub(crate) id: u16,
@@ -504,7 +504,10 @@ mod tests {
         let pci_segment = PciSegment::new(0, &vmm.vm, pci_irq_slots).unwrap();
 
         let mut data = [0u8; u64_to_usize(PCI_CONFIG_IO_PORT_SIZE)];
-        vmm.vm.pio_bus().read(PCI_CONFIG_IO_PORT, &mut data).unwrap();
+        vmm.vm
+            .pio_bus()
+            .read(PCI_CONFIG_IO_PORT, &mut data)
+            .unwrap();
 
         vmm.vm
             .pio_bus()

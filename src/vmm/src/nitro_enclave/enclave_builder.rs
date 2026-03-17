@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use event_manager::SubscriberOps;
 
+use crate::device_manager::DeviceManager;
 use crate::logger::info;
 use crate::nitro_enclave::eif;
 use crate::nitro_enclave::enclave_vcpu;
@@ -22,7 +23,6 @@ use crate::utils::mib_to_bytes;
 use crate::vmm_config::enclave::EnclaveConfig;
 use crate::vmm_config::instance_info::{InstanceInfo, VmState};
 use crate::vstate::vm::Vm;
-use crate::device_manager::DeviceManager;
 use crate::{EventManager, Vmm};
 
 /// Errors from building and booting an enclave.
@@ -121,8 +121,7 @@ pub fn build_and_boot_enclave(
     // 8. Debug mode: vsock console
     if enclave_config.debug_mode {
         info!("Starting vsock console for CID={assigned_cid}");
-        let console =
-            VsockConsole::connect(assigned_cid, vm_resources.serial_out_path.as_deref())?;
+        let console = VsockConsole::connect(assigned_cid, vm_resources.serial_out_path.as_deref())?;
         event_manager.add_subscriber(Arc::new(Mutex::new(console)));
     }
 

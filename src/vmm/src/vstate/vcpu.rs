@@ -125,7 +125,11 @@ impl Vcpu {
     /// * `index` - Represents the 0-based CPU index between [0, max vcpus).
     /// * `vm` - The vm to which this vcpu will get attached.
     /// * `exit_evt` - An `EventFd` that will be written into when this vcpu exits.
-    pub fn new(index: u8, vm: &crate::vstate::vm::ArchVm, exit_evt: EventFd) -> Result<Self, VcpuError> {
+    pub fn new(
+        index: u8,
+        vm: &crate::vstate::vm::ArchVm,
+        exit_evt: EventFd,
+    ) -> Result<Self, VcpuError> {
         let (event_sender, event_receiver) = channel();
         let (response_sender, response_receiver) = channel();
         let kvm_vcpu = KvmVcpu::new(index, vm).unwrap();
@@ -671,8 +675,8 @@ pub(crate) mod tests {
     use crate::vstate::kvm::Kvm;
     use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
     use crate::vstate::vcpu::VcpuError as EmulationError;
-    use crate::vstate::vm::{ArchVm, Vm};
     use crate::vstate::vm::tests::setup_vm_with_memory;
+    use crate::vstate::vm::{ArchVm, Vm};
 
     struct DummyDevice;
 

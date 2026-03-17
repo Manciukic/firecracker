@@ -153,7 +153,8 @@ impl MsixVectorGroup {
 
             self.vm.as_kvm().register_msi(vector, masked, msi_config)?;
             if set_gsi {
-                self.vm.as_kvm()
+                self.vm
+                    .as_kvm()
                     .set_gsi_routes()
                     .map_err(|err| std::io::Error::other(format!("MSI-X update: {err}")))?
             }

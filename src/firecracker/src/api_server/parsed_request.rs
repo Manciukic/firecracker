@@ -28,10 +28,10 @@ use super::request::pmem::parse_put_pmem;
 use super::request::snapshot::{parse_patch_vm_state, parse_put_snapshot};
 use super::request::version::parse_get_version;
 use super::request::vsock::parse_put_vsock;
+use crate::api_server::request::enclave::parse_put_enclave;
 use crate::api_server::request::hotplug::memory::{
     parse_get_memory_hotplug, parse_patch_memory_hotplug, parse_put_memory_hotplug,
 };
-use crate::api_server::request::enclave::parse_put_enclave;
 use crate::api_server::request::serial::parse_put_serial;
 
 #[derive(Debug)]
@@ -98,7 +98,7 @@ impl TryFrom<&Request> for ParsedRequest {
             (Method::Put, "boot-source", Some(body)) => parse_put_boot_source(body),
             (Method::Put, "cpu-config", Some(body)) => parse_put_cpu_config(body),
             (Method::Put, "drives", Some(body)) => parse_put_drive(body, path_tokens.next()),
-                        (Method::Put, "enclave", Some(body)) => parse_put_enclave(body),
+            (Method::Put, "enclave", Some(body)) => parse_put_enclave(body),
             (Method::Put, "pmem", Some(body)) => parse_put_pmem(body, path_tokens.next()),
             (Method::Put, "logger", Some(body)) => parse_put_logger(body),
             (Method::Put, "serial", Some(body)) => parse_put_serial(body),

@@ -26,8 +26,8 @@ use vmm_sys_util::eventfd::EventFd;
 
 pub use crate::arch::{ArchVm, ArchVmError, VmState};
 use crate::arch::{GSI_MSI_END, host_page_size};
-use crate::nitro_enclave::enclave_vm::EnclaveVm;
 use crate::logger::info;
+use crate::nitro_enclave::enclave_vm::EnclaveVm;
 use crate::pci::{DeviceRelocation, DeviceRelocationError, PciDevice};
 use crate::persist::CreateSnapshotError;
 use crate::vmm_config::snapshot::SnapshotType;
@@ -100,12 +100,12 @@ pub enum Vm {
     /// KVM-backed virtual machine.
     Kvm(ArchVm),
     /// Nitro Enclave-backed virtual machine.
-        Enclave(EnclaveVm),
+    Enclave(EnclaveVm),
 }
 
 impl Vm {
     /// Returns true if this is an enclave VM.
-        pub fn is_enclave(&self) -> bool {
+    pub fn is_enclave(&self) -> bool {
         matches!(self, Vm::Enclave(_))
     }
 
@@ -113,7 +113,7 @@ impl Vm {
     pub fn as_kvm(&self) -> &ArchVm {
         match self {
             Vm::Kvm(v) => v,
-                        Vm::Enclave(_) => panic!("as_kvm() called on non-KVM Vm"),
+            Vm::Enclave(_) => panic!("as_kvm() called on non-KVM Vm"),
         }
     }
 
@@ -121,7 +121,7 @@ impl Vm {
     pub fn as_kvm_mut(&mut self) -> &mut ArchVm {
         match self {
             Vm::Kvm(v) => v,
-                        Vm::Enclave(_) => panic!("as_kvm_mut() called on non-KVM Vm"),
+            Vm::Enclave(_) => panic!("as_kvm_mut() called on non-KVM Vm"),
         }
     }
 
@@ -225,7 +225,8 @@ impl Vm {
         mem_file_path: &Path,
         snapshot_type: SnapshotType,
     ) -> Result<(), CreateSnapshotError> {
-        self.as_kvm().snapshot_memory_to_file(mem_file_path, snapshot_type)
+        self.as_kvm()
+            .snapshot_memory_to_file(mem_file_path, snapshot_type)
     }
 
     /// Saves and returns the Kvm Vm state.

@@ -333,8 +333,8 @@ pub fn build_microvm_for_boot(
         vcpus_handles: Vec::new(),
         vcpus_exit_evt: Some(vcpus_exit_evt),
         device_manager,
-                enclave_cid: None,
-                enclave_debug_mode: false,
+        enclave_cid: None,
+        enclave_debug_mode: false,
     };
     let vmm = Arc::new(Mutex::new(vmm));
 
@@ -526,7 +526,7 @@ pub fn build_microvm_from_snapshot(
     let mut device_manager =
         DeviceManager::restore(device_ctor_args, &microvm_state.device_states)?;
 
-    let vmm = Vmm {
+    let mut vmm = Vmm {
         instance_info: instance_info.clone(),
         machine_config: vm_resources.machine_config.clone(),
         boot_source_config: vm_resources.boot_source.config.clone(),
@@ -537,22 +537,20 @@ pub fn build_microvm_from_snapshot(
         vcpus_handles: Vec::new(),
         vcpus_exit_evt: Some(vcpus_exit_evt),
         device_manager,
-                enclave_cid: None,
-                enclave_debug_mode: false,
+        enclave_cid: None,
+        enclave_debug_mode: false,
     };
 
-    let vmm = Arc::new(Mutex::new(vmm));
-
     // Move vcpus to their own threads and start their state machine in the 'Paused' state.
-    vmm.lock()
-        .unwrap()
-        .start_vcpus(
-            vcpus,
-            seccomp_filters
-                .get("vcpu")
-                .ok_or(BuildMicrovmFromSnapshotError::MissingVcpuSeccompFilters)?
-                .clone(),
-        )?;
+    vmm.start_vcpus(
+        vcpus,
+        seccomp_filters
+            .get("vcpu")
+            .ok_or(BuildMicrovmFromSnapshotError::MissingVcpuSeccompFilters)?
+            .clone(),
+    )?;
+
+    let vmm = Arc::new(Mutex::new(vmm));
     event_manager.add_subscriber(vmm.clone());
 
     // Load seccomp filters for the VMM thread.
@@ -890,8 +888,8 @@ pub(crate) mod tests {
             vcpus_handles: Vec::new(),
             vcpus_exit_evt: Some(vcpus_exit_evt),
             device_manager: default_device_manager(),
-                        enclave_cid: None,
-                        enclave_debug_mode: false,
+            enclave_cid: None,
+            enclave_debug_mode: false,
         }
     }
 

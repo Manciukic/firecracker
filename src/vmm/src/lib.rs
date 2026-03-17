@@ -348,9 +348,9 @@ pub struct Vmm {
 
     // Enclave-specific fields
     /// Assigned enclave CID (only set for enclave VMs).
-        pub enclave_cid: Option<u64>,
+    pub enclave_cid: Option<u64>,
     /// Whether enclave debug mode is active.
-        pub enclave_debug_mode: bool,
+    pub enclave_debug_mode: bool,
 }
 
 impl Vmm {
@@ -468,7 +468,7 @@ impl Vmm {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots
             serial_config: None,
             memory_hotplug,
-                        enclave: None,
+            enclave: None,
         }
     }
 
@@ -588,7 +588,11 @@ impl Vmm {
         // upon resuming from the snapshot.
         let device_states = self.device_manager.save();
         let vcpu_states = self.save_vcpu_states()?;
-        let kvm_state = self.kvm.as_ref().expect("kvm not available for enclaves").save_state();
+        let kvm_state = self
+            .kvm
+            .as_ref()
+            .expect("kvm not available for enclaves")
+            .save_state();
         let vm_state = {
             #[cfg(target_arch = "x86_64")]
             {
@@ -874,7 +878,10 @@ impl MutEventSubscriber for Vmm {
 
         match &*self.vm {
             Vm::Kvm(_) => {
-                let exit_evt = self.vcpus_exit_evt.as_ref().expect("vcpus_exit_evt required for KVM");
+                let exit_evt = self
+                    .vcpus_exit_evt
+                    .as_ref()
+                    .expect("vcpus_exit_evt required for KVM");
                 if source == exit_evt.as_raw_fd() && event_set == EventSet::IN {
                     // Exit event handling should never do anything more than call 'self.stop()'.
                     let _ = exit_evt.read();
@@ -897,7 +904,7 @@ impl MutEventSubscriber for Vmm {
                     error!("Spurious EventManager event for handler: Vmm");
                 }
             }
-                        Vm::Enclave(_) => {
+            Vm::Enclave(_) => {
                 // HUP means the enclave has exited.
                 if event_set.contains(EventSet::HANG_UP) || event_set.contains(EventSet::ERROR) {
                     info!("Enclave exited (CID={:?})", self.enclave_cid);
@@ -913,12 +920,15 @@ impl MutEventSubscriber for Vmm {
     fn init(&mut self, ops: &mut EventOps) {
         match &*self.vm {
             Vm::Kvm(_) => {
-                let exit_evt = self.vcpus_exit_evt.as_ref().expect("vcpus_exit_evt required for KVM");
+                let exit_evt = self
+                    .vcpus_exit_evt
+                    .as_ref()
+                    .expect("vcpus_exit_evt required for KVM");
                 if let Err(err) = ops.add(Events::new(exit_evt, EventSet::IN)) {
                     error!("Failed to register vmm exit event: {}", err);
                 }
             }
-                        Vm::Enclave(enclave_vm) => {
+            Vm::Enclave(enclave_vm) => {
                 let enclave_fd = enclave_vm.enclave_raw_fd();
                 // SAFETY: We use the raw fd value only for EventOps registration.
                 let event_fd = unsafe { vmm_sys_util::eventfd::EventFd::from_raw_fd(enclave_fd) };
