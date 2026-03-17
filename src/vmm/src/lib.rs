@@ -310,17 +310,6 @@ pub enum DumpCpuConfigError {
     NotAllowed(String),
 }
 
-/// Common interface shared by both the KVM-based `Vmm` and the Nitro Enclave `EnclaveVmm`.
-///
-/// This trait unifies shutdown detection so that event loops and other infrastructure
-/// code can work with either VMM type without matching on an enum.
-pub trait VmmShutdown {
-    /// Returns the shutdown exit code, if the VMM has been signalled to stop.
-    fn shutdown_exit_code(&self) -> Option<FcExitCode>;
-    /// Signals the VMM to stop with the given exit code.
-    fn stop(&mut self, exit_code: FcExitCode);
-}
-
 /// Contains the state and associated methods required for the Firecracker VMM.
 #[derive(Debug)]
 pub struct Vmm {
@@ -345,12 +334,6 @@ pub struct Vmm {
     vcpus_exit_evt: Option<EventFd>,
     // Device manager
     device_manager: DeviceManager,
-
-    // Enclave-specific fields
-    /// Assigned enclave CID (only set for enclave VMs).
-    pub enclave_cid: Option<u64>,
-    /// Whether enclave debug mode is active.
-    pub enclave_debug_mode: bool,
 }
 
 impl Vmm {
@@ -803,14 +786,14 @@ impl Vmm {
     pub fn vm(&self) -> &Vm {
         &self.vm
     }
-}
 
-impl VmmShutdown for Vmm {
-    fn shutdown_exit_code(&self) -> Option<FcExitCode> {
+    /// Returns the shutdown exit code, if the VMM has been signalled to stop.
+    pub fn shutdown_exit_code(&self) -> Option<FcExitCode> {
         self.shutdown_exit_code
     }
 
-    fn stop(&mut self, exit_code: FcExitCode) {
+    /// Signals the VMM to stop with the given exit code.
+    pub fn stop(&mut self, exit_code: FcExitCode) {
         info!("Vmm is stopping.");
         self.shutdown_exit_code = Some(exit_code);
     }
@@ -907,10 +890,10 @@ impl MutEventSubscriber for Vmm {
             Vm::Enclave(_) => {
                 // HUP means the enclave has exited.
                 if event_set.contains(EventSet::HANG_UP) || event_set.contains(EventSet::ERROR) {
-                    info!("Enclave exited (CID={:?})", self.enclave_cid);
+                    info!("Enclave exited");
                     self.stop(FcExitCode::Ok);
                 } else if event_set.contains(EventSet::IN) {
-                    info!("Enclave fd readable event (CID={:?})", self.enclave_cid);
+                    info!("Enclave fd readable event");
                     self.stop(FcExitCode::Ok);
                 }
             }

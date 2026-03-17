@@ -31,7 +31,7 @@ use vmm::signal_handler::register_signal_handlers;
 use vmm::snapshot::{SnapshotError, get_format_version};
 use vmm::vmm_config::instance_info::{InstanceInfo, VmState};
 use vmm::vmm_config::metrics::{MetricsConfig, MetricsConfigError, init_metrics};
-use vmm::{EventManager, FcExitCode, HTTP_MAX_PAYLOAD_SIZE, VmmShutdown};
+use vmm::{EventManager, FcExitCode, HTTP_MAX_PAYLOAD_SIZE};
 use vmm_sys_util::terminal::Terminal;
 
 use crate::seccomp::SeccompConfig;

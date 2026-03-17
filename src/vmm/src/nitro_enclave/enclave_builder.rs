@@ -140,8 +140,6 @@ pub fn build_and_boot_enclave(
         vcpus_handles: Vec::new(),
         vcpus_exit_evt: None,
         device_manager: DeviceManager::new_without_legacy(),
-        enclave_cid: Some(assigned_cid),
-        enclave_debug_mode: enclave_config.debug_mode,
     };
     let vmm = Arc::new(Mutex::new(vmm));
     event_manager.add_subscriber(vmm.clone());

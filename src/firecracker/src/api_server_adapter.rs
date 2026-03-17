@@ -15,7 +15,7 @@ use vmm::rpc_interface::{
 };
 use vmm::seccomp::BpfThreadMap;
 use vmm::vmm_config::instance_info::InstanceInfo;
-use vmm::{EventManager, FcExitCode, Vmm, VmmShutdown};
+use vmm::{EventManager, FcExitCode, Vmm};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
