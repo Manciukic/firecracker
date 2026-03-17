@@ -10,7 +10,7 @@ use utils::time::{ClockType, get_time_us};
 use super::builder::build_and_boot_microvm;
 use super::persist::{create_snapshot, restore_from_snapshot};
 use super::resources::VmResources;
-use super::{FcExitCode, Vmm, VmmError, VmmShutdown};
+use super::{Vmm, VmmError};
 use crate::EventManager;
 use crate::builder::StartMicrovmError;
 #[cfg(feature = "nitro-enclave")]
@@ -277,7 +277,7 @@ pub struct PrebootApiController<'a> {
     vm_resources: &'a mut VmResources,
     event_manager: &'a mut EventManager,
     /// The [`Vmm`] object constructed through requests (KVM or Enclave).
-    pub built_vmm: Option<BuiltVmm>,
+    pub built_vmm: Option<Arc<Mutex<Vmm>>>,
     // Configuring boot specific resources will set this to true.
     // Loading from snapshot will not be allowed once this is true.
     boot_path: bool,
@@ -316,41 +316,6 @@ pub enum LoadSnapshotError {
 pub type ApiRequest = Box<VmmAction>;
 /// Shorthand type for a response containing a boxed Result.
 pub type ApiResponse = Box<Result<VmmData, VmmActionError>>;
-
-/// A built VMM instance — always `Arc<Mutex<Vmm>>` for both KVM and Enclave.
-pub type BuiltVmm = Arc<Mutex<Vmm>>;
-
-/// Extension methods for `BuiltVmm`.
-pub trait BuiltVmmExt {
-    /// Returns the shutdown exit code.
-    fn shutdown_exit_code(&self) -> Option<FcExitCode>;
-
-    /// Run the event manager loop until the VMM shuts down.
-    fn run_event_loop(&self, event_manager: &mut EventManager) -> Result<(), FcExitCode>;
-}
-
-impl BuiltVmmExt for BuiltVmm {
-    fn shutdown_exit_code(&self) -> Option<FcExitCode> {
-        self.lock().unwrap().shutdown_exit_code()
-    }
-
-    fn run_event_loop(
-        &self,
-        event_manager: &mut EventManager,
-    ) -> Result<(), FcExitCode> {
-        loop {
-            event_manager
-                .run()
-                .expect("EventManager events driver fatal error");
-
-            match self.shutdown_exit_code() {
-                Some(FcExitCode::Ok) => return Ok(()),
-                Some(exit_code) => return Err(exit_code),
-                None => continue,
-            }
-        }
-    }
-}
 
 /// Error type for `PrebootApiController::build_microvm_from_requests`.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -399,7 +364,7 @@ impl<'a> PrebootApiController<'a> {
         pci_enabled: bool,
         mmds_size_limit: usize,
         metadata_json: Option<&str>,
-    ) -> Result<BuiltVmm, BuildMicrovmFromRequestsError> {
+    ) -> Result<Arc<Mutex<Vmm>>, BuildMicrovmFromRequestsError> {
         let mut vm_resources = VmResources {
             boot_timer: boot_timer_enabled,
             mmds_size_limit,
@@ -426,7 +391,7 @@ impl<'a> PrebootApiController<'a> {
         // Configure and start microVM through successive API calls.
         // Iterate through API calls to configure microVm.
         // The loop breaks when a microVM is successfully started, and a running Vmm is built.
-        while !preboot_controller.is_built() {
+        while preboot_controller.built_vmm.is_none() {
             // Get request
             let req = from_api
                 .recv()
@@ -450,7 +415,9 @@ impl<'a> PrebootApiController<'a> {
             }
         }
 
-        preboot_controller.into_built_vmm()
+        // Safe to unwrap because previous loop cannot end on None.
+        let vmm = preboot_controller.built_vmm.unwrap();
+        Ok(vmm)
     }
 
     /// Handles the incoming preboot request and provides a response for it.
@@ -690,17 +657,6 @@ impl<'a> PrebootApiController<'a> {
         self.boot_path = true;
         self.vm_resources.enclave = Some(cfg);
         Ok(VmmData::Empty)
-    }
-
-    /// Check whether a VMM (microVM or enclave) has been built.
-    fn is_built(&self) -> bool {
-        self.built_vmm.is_some()
-    }
-
-    /// Consume the controller and return the built VMM instance.
-    fn into_built_vmm(self) -> Result<BuiltVmm, BuildMicrovmFromRequestsError> {
-        self.built_vmm
-            .ok_or_else(|| unreachable!("into_built_vmm called but nothing was built"))
     }
 
     // On success, this command will end the pre-boot stage and this controller

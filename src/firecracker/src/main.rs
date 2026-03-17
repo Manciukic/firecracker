@@ -31,7 +31,7 @@ use vmm::signal_handler::register_signal_handlers;
 use vmm::snapshot::{SnapshotError, get_format_version};
 use vmm::vmm_config::instance_info::{InstanceInfo, VmState};
 use vmm::vmm_config::metrics::{MetricsConfig, MetricsConfigError, init_metrics};
-use vmm::{EventManager, FcExitCode, HTTP_MAX_PAYLOAD_SIZE};
+use vmm::{EventManager, FcExitCode, HTTP_MAX_PAYLOAD_SIZE, VmmShutdown};
 use vmm_sys_util::terminal::Terminal;
 
 use crate::seccomp::SeccompConfig;
@@ -564,8 +564,6 @@ pub enum BuildFromJsonError {
     BuildEnclave(vmm::nitro_enclave::enclave_builder::EnclaveBuilderError),
 }
 
-use vmm::rpc_interface::{BuiltVmm as VmmInstance, BuiltVmmExt};
-
 // Configure and start a microVM as described by the command-line JSON.
 #[allow(clippy::too_many_arguments)]
 fn build_microvm_from_json(
@@ -577,7 +575,7 @@ fn build_microvm_from_json(
     pci_enabled: bool,
     mmds_size_limit: usize,
     metadata_json: Option<&str>,
-) -> Result<VmmInstance, BuildFromJsonError> {
+) -> Result<Arc<Mutex<vmm::Vmm>>, BuildFromJsonError> {
     let mut vm_resources =
         VmResources::from_json(&config_json, &instance_info, mmds_size_limit, metadata_json)
             .map_err(BuildFromJsonError::ParseFromJson)?;
@@ -635,7 +633,7 @@ fn run_without_api(
     event_manager.add_subscriber(firecracker_metrics.clone());
 
     // Build the microVm. We can ignore VmResources since it's not used without api.
-    let vmm_instance = build_microvm_from_json(
+    let vmm = build_microvm_from_json(
         seccomp_filters,
         &mut event_manager,
         // Safe to unwrap since '--no-api' requires this to be set.
@@ -655,7 +653,16 @@ fn run_without_api(
         .start(metrics::WRITE_METRICS_PERIOD_MS);
 
     // Run the EventManager that drives everything in the microVM.
-    vmm_instance
-        .run_event_loop(&mut event_manager)
-        .map_err(RunWithoutApiError::Shutdown)
+    loop {
+        event_manager
+            .run()
+            .expect("Failed to start the event manager");
+
+        match vmm.lock().unwrap().shutdown_exit_code() {
+            Some(FcExitCode::Ok) => break,
+            Some(exit_code) => return Err(RunWithoutApiError::Shutdown(exit_code)),
+            None => continue,
+        }
+    }
+    Ok(())
 }
