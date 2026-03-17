@@ -982,10 +982,10 @@ mod tests {
 
     fn create_vmm_with_virtio_pci_device() -> Vmm {
         let mut vmm = default_vmm();
-        vmm.device_manager.as_mut().unwrap().enable_pci(&vmm.vm);
+        vmm.device_manager.enable_pci(&vmm.vm);
         let entropy = Arc::new(Mutex::new(Entropy::new(RateLimiter::default()).unwrap()));
         let mut event_manager = crate::EventManager::new().unwrap();
-        vmm.device_manager.as_mut().unwrap()
+        vmm.device_manager
             .attach_virtio_device(
                 &vmm.vm,
                 "rng".to_string(),
@@ -999,7 +999,7 @@ mod tests {
     }
 
     fn get_virtio_device(vmm: &Vmm) -> Arc<Mutex<VirtioPciDevice>> {
-        vmm.device_manager.as_ref().unwrap()
+        vmm.device_manager
             .pci_devices
             .get_virtio_device(VirtioDeviceType::Rng, "rng")
             .unwrap()

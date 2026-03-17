@@ -104,8 +104,8 @@ pub struct DeviceManager {
     /// MMIO devices
     pub mmio_devices: MMIODeviceManager,
     #[cfg(target_arch = "x86_64")]
-    /// Legacy devices
-    pub legacy_devices: PortIODeviceManager,
+    /// Legacy devices (None for enclaves)
+    pub legacy_devices: Option<PortIODeviceManager>,
     /// ACPI devices
     pub acpi_devices: ACPIDeviceManager,
     /// PCIe devices
@@ -182,10 +182,21 @@ impl DeviceManager {
         Ok(DeviceManager {
             mmio_devices: MMIODeviceManager::new(),
             #[cfg(target_arch = "x86_64")]
-            legacy_devices,
+            legacy_devices: Some(legacy_devices),
             acpi_devices: ACPIDeviceManager::default(),
             pci_devices: PciDevices::new(),
         })
+    }
+
+    /// Creates a DeviceManager without legacy devices (for enclaves).
+    pub fn new_without_legacy() -> Self {
+        DeviceManager {
+            mmio_devices: MMIODeviceManager::new(),
+            #[cfg(target_arch = "x86_64")]
+            legacy_devices: None,
+            acpi_devices: ACPIDeviceManager::default(),
+            pci_devices: PciDevices::new(),
+        }
     }
 
     /// Attaches an MMIO VirtioDevice device to the device manager and event manager.
@@ -545,7 +556,7 @@ impl<'a> Persist<'a> for DeviceManager {
         let device_manager = DeviceManager {
             mmio_devices,
             #[cfg(target_arch = "x86_64")]
-            legacy_devices,
+            legacy_devices: Some(legacy_devices),
             acpi_devices,
             pci_devices,
         };
@@ -583,16 +594,14 @@ impl DeviceManager {
 
         #[cfg(target_arch = "x86_64")]
         {
-            let mut serial = self
-                .legacy_devices
-                .stdio_serial
-                .lock()
-                .expect("Poisoned lock");
+            if let Some(ref legacy) = self.legacy_devices {
+                let mut serial = legacy.stdio_serial.lock().expect("Poisoned lock");
 
-            serial
-                .serial
-                .write(IER_RDA_OFFSET, IER_RDA_BIT)
-                .map_err(|_| EmulateSerialInitError(std::io::Error::last_os_error()))?;
+                serial
+                    .serial
+                    .write(IER_RDA_OFFSET, IER_RDA_BIT)
+                    .map_err(|_| EmulateSerialInitError(std::io::Error::last_os_error()))?;
+            }
             Ok(())
         }
     }
@@ -630,7 +639,7 @@ pub(crate) mod tests {
         DeviceManager {
             mmio_devices,
             #[cfg(target_arch = "x86_64")]
-            legacy_devices,
+            legacy_devices: Some(legacy_devices),
             acpi_devices,
             pci_devices,
         }

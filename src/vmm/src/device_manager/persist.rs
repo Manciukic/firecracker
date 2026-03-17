@@ -702,7 +702,7 @@ mod tests {
                 memory_hotplug_config,
             );
 
-            let device_state = vmm.device_manager.as_ref().unwrap().save();
+            let device_state = vmm.device_manager.save();
             serialized_data = bitcode::serialize(&device_state).unwrap();
         }
 

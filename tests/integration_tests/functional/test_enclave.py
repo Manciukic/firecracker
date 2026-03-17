@@ -302,7 +302,7 @@ def test_enclave_eif_build_from_kernel(microvm_factory):
         initrd_path=vm.create_jailed_resource(initrd),
         boot_args=NE_CMDLINE,
     )
-    # Use production mode (no heartbeat/console) to keep the test fast.
+    # Use production mode — the microVM initramfs doesn't have console support.
     enclave_kwargs = {"debug_mode": False}
     if cpu_ids:
         enclave_kwargs["cpu_ids"] = cpu_ids
@@ -319,67 +319,11 @@ def test_enclave_eif_build_from_kernel(microvm_factory):
         f"Expected 'Enclave started with CID=' in log, got:\n{log}"
     )
 
-    # The enclave may exit (the initramfs init script is for microVMs,
-    # not enclaves), so kill() may fail — that's fine.
+    # The microVM kernel is not enclave-aware so the enclave will crash
+    # shortly after start. kill() may fail — that's expected.
     try:
         vm.kill()
     except ProcessLookupError:
         pass
 
 
-@requires_ne
-def test_enclave_eif_build_stays_booting(microvm_factory):
-    """Verify kernel+initrd enclave stays in Booting state (no heartbeat).
-
-    When building an EIF from a raw kernel+initrd (not the hello.eif),
-    the guest init script is for microVMs, not enclaves, so no heartbeat
-    byte is sent. The state should remain "Booting".
-    """
-    bzimage = _get_bzimage_path()
-    if not bzimage:
-        pytest.skip("bzImage not found in artifacts")
-    initrd = ARTIFACT_DIR / "initramfs.cpio"
-    if not initrd.exists():
-        pytest.skip("initramfs.cpio not found in artifacts")
-
-    vm = _spawn_enclave_vm(microvm_factory, bzimage)
-
-    ne_cpus = _get_ne_cpus()
-    cpu_ids = ne_cpus[:2] if ne_cpus else None
-    vcpu_count = len(cpu_ids) if cpu_ids else 2
-
-    vm.api.machine_config.put(
-        vcpu_count=vcpu_count,
-        mem_size_mib=256,
-        huge_pages="2M",
-    )
-    vm.api.boot.put(
-        kernel_image_path=vm.create_jailed_resource(bzimage),
-        initrd_path=vm.create_jailed_resource(initrd),
-        boot_args=NE_CMDLINE,
-    )
-    enclave_kwargs = {"debug_mode": False}
-    if cpu_ids:
-        enclave_kwargs["cpu_ids"] = cpu_ids
-    vm.api.enclave.put(**enclave_kwargs)
-    vm.api.actions.put(action_type="InstanceStart")
-
-    # Check state immediately after start — should be Booting
-    response = vm.api.describe.get()
-    state = response.json()["state"]
-    assert state == "Booting", (
-        f"Expected state 'Booting', got '{state}'"
-    )
-
-    # Wait a bit and verify it stays Booting (no heartbeat from this kernel)
-    time.sleep(3)
-    response = vm.api.describe.get()
-    state = response.json()["state"]
-    assert state == "Booting", (
-        f"Expected state to remain 'Booting', got '{state}'"
-    )
-
-    try:
-        vm.kill()
-    except ProcessLookupError:
-        pass

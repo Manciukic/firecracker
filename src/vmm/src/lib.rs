@@ -345,8 +345,8 @@ pub struct Vmm {
     pub vcpus_handles: Vec<VcpuHandle>,
     // Used by Vcpus and devices to initiate teardown; Vmm should never write here.
     vcpus_exit_evt: Option<EventFd>,
-    // Device manager (None for enclaves)
-    device_manager: Option<DeviceManager>,
+    // Device manager
+    device_manager: DeviceManager,
 
     // Enclave-specific fields
     /// Assigned enclave CID (only set for enclave VMs).
@@ -358,20 +358,6 @@ pub struct Vmm {
 }
 
 impl Vmm {
-    /// Access the device manager. Panics for enclave VMs.
-    fn device_manager(&self) -> &DeviceManager {
-        self.device_manager
-            .as_ref()
-            .expect("device_manager not available for enclave VMs")
-    }
-
-    /// Mutably access the device manager. Panics for enclave VMs.
-    fn device_manager_mut(&mut self) -> &mut DeviceManager {
-        self.device_manager
-            .as_mut()
-            .expect("device_manager not available for enclave VMs")
-    }
-
     /// Gets Vmm version.
     pub fn version(&self) -> String {
         self.instance_info.vmm_version.clone()
@@ -385,7 +371,7 @@ impl Vmm {
     /// Gets MMDS reference, if any.
     pub fn get_mmds(&self) -> Option<Arc<Mutex<Mmds>>> {
         let mut mmds = None;
-        self.device_manager()
+        self.device_manager
             .for_each_virtio_device(|device_type, device| {
                 if device_type == VirtioDeviceType::Net
                     && let Some(net) = device.as_any().downcast_ref::<Net>()
@@ -411,7 +397,7 @@ impl Vmm {
         let mut mmds_ipv4_address = None;
         let mut mmds_ref = None;
 
-        self.device_manager()
+        self.device_manager
             .for_each_virtio_device(|device_type, device| match device_type {
                 VirtioDeviceType::Block => {
                     if let Some(b) = device.as_any().downcast_ref::<Block>() {
@@ -539,7 +525,7 @@ impl Vmm {
 
     /// Sends a resume command to the vCPUs.
     pub fn resume_vm(&mut self) -> Result<(), VmmError> {
-        self.device_manager().kick_virtio_devices();
+        self.device_manager.kick_virtio_devices();
 
         // Send the events.
         self.vcpus_handles
@@ -586,8 +572,10 @@ impl Vmm {
     /// Injects CTRL+ALT+DEL keystroke combo in the i8042 device.
     #[cfg(target_arch = "x86_64")]
     pub fn send_ctrl_alt_del(&mut self) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .legacy_devices
+            .as_ref()
+            .expect("legacy devices not available")
             .i8042
             .lock()
             .expect("i8042 lock was poisoned")
@@ -603,7 +591,7 @@ impl Vmm {
         // might modify the VirtIO transport and send an interrupt to the guest. If we save KVM
         // state before we save device state, that interrupt will never be delivered to the guest
         // upon resuming from the snapshot.
-        let device_states = self.device_manager().save();
+        let device_states = self.device_manager.save();
         let vcpu_states = self.save_vcpu_states()?;
         let kvm_state = self.kvm.as_ref().expect("kvm not available for enclaves").save_state();
         let vm_state = {
@@ -691,7 +679,7 @@ impl Vmm {
         drive_id: &str,
         path_on_host: String,
     ) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(drive_id, |block: &mut Block| {
                 block.update_disk_image(path_on_host)
             })??;
@@ -705,7 +693,7 @@ impl Vmm {
         rl_bytes: BucketUpdate,
         rl_ops: BucketUpdate,
     ) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(drive_id, |block: &mut Block| {
                 block.update_rate_limiter(rl_bytes, rl_ops)
             })??;
@@ -714,7 +702,7 @@ impl Vmm {
 
     /// Updates the rate limiter parameters for block device with `drive_id` id.
     pub fn update_vhost_user_block_config(&mut self, drive_id: &str) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(drive_id, |block: &mut Block| block.update_config())??;
         Ok(())
     }
@@ -728,7 +716,7 @@ impl Vmm {
         tx_bytes: BucketUpdate,
         tx_ops: BucketUpdate,
     ) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(net_id, |net: &mut Net| {
                 net.patch_rate_limiters(rx_bytes, rx_ops, tx_bytes, tx_ops)
             })?;
@@ -739,8 +727,6 @@ impl Vmm {
     pub fn balloon_config(&self) -> Result<BalloonConfig, VmmError> {
         let config = self
             .device_manager
-            .as_ref()
-            .unwrap()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.config())?;
         Ok(config)
     }
@@ -749,15 +735,13 @@ impl Vmm {
     pub fn latest_balloon_stats(&self) -> Result<BalloonStats, VmmError> {
         let stats = self
             .device_manager
-            .as_ref()
-            .unwrap()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.latest_stats())??;
         Ok(stats)
     }
 
     /// Updates configuration for the balloon device target size.
     pub fn update_balloon_config(&mut self, amount_mib: u32) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| {
                 dev.update_size(amount_mib)
             })??;
@@ -769,7 +753,7 @@ impl Vmm {
         &mut self,
         stats_polling_interval_s: u16,
     ) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| {
                 dev.update_stats_polling_interval(stats_polling_interval_s)
             })??;
@@ -778,14 +762,14 @@ impl Vmm {
 
     /// Returns the current state of the memory hotplug device.
     pub fn memory_hotplug_status(&self) -> Result<VirtioMemStatus, VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(VIRTIO_MEM_DEV_ID, |dev: &mut VirtioMem| dev.status())
             .map_err(VmmError::FindDeviceError)
     }
 
     /// Returns the current state of the memory hotplug device.
     pub fn update_memory_hotplug_size(&self, requested_size_mib: usize) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(VIRTIO_MEM_DEV_ID, |dev: &mut VirtioMem| {
                 dev.update_requested_size(requested_size_mib)
             })
@@ -795,7 +779,7 @@ impl Vmm {
 
     /// Starts the balloon free page hinting run
     pub fn start_balloon_hinting(&mut self, cmd: StartHintingCmd) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.start_hinting(cmd))??;
         Ok(())
     }
@@ -804,15 +788,13 @@ impl Vmm {
     pub fn get_balloon_hinting_status(&mut self) -> Result<HintingStatus, VmmError> {
         let status = self
             .device_manager
-            .as_ref()
-            .unwrap()
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.get_hinting_status())??;
         Ok(status)
     }
 
     /// Stops the balloon free page hinting run
     pub fn stop_balloon_hinting(&mut self) -> Result<(), VmmError> {
-        self.device_manager()
+        self.device_manager
             .with_virtio_device(BALLOON_DEV_ID, |dev: &mut Balloon| dev.stop_hinting())??;
         Ok(())
     }
@@ -955,7 +937,6 @@ impl MutEventSubscriber for Vmm {
                 }
                 // Forget the EventFd wrapper so it doesn't close the real fd.
                 std::mem::forget(event_fd);
-                self.instance_info.state = VmState::Running;
             }
         }
     }

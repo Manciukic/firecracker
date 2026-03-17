@@ -22,6 +22,7 @@ use crate::utils::mib_to_bytes;
 use crate::vmm_config::enclave::EnclaveConfig;
 use crate::vmm_config::instance_info::{InstanceInfo, VmState};
 use crate::vstate::vm::Vm;
+use crate::device_manager::DeviceManager;
 use crate::{EventManager, Vmm};
 
 /// Errors from building and booting an enclave.
@@ -131,7 +132,7 @@ pub fn build_and_boot_enclave(
         uffd: None,
         vcpus_handles: Vec::new(),
         vcpus_exit_evt: None,
-        device_manager: None,
+        device_manager: DeviceManager::new_without_legacy(),
         enclave_cid: Some(assigned_cid),
         enclave_debug_mode: enclave_config.debug_mode,
     };
