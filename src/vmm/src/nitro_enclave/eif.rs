@@ -33,9 +33,12 @@ const MAX_NUM_SECTIONS: usize = 32;
 
 /// EIF header size (fixed):
 /// magic(4) + version(2) + flags(2) + default_mem(8) + default_cpus(8) +
-/// num_sections(4) + offsets(32×8) + sizes(32×8) + unused(4) + crc32(4) = 548
+/// reserved(2) + num_sections(2) + offsets(32×8) + sizes(32×8) + unused(4) + crc32(4) = 548
 const EIF_HEADER_SIZE: usize =
-    4 + 2 + 2 + 8 + 8 + 4 + MAX_NUM_SECTIONS * 8 + MAX_NUM_SECTIONS * 8 + 4 + 4;
+    4 + 2 + 2 + 8 + 8 + 2 + 2 + MAX_NUM_SECTIONS * 8 + MAX_NUM_SECTIONS * 8 + 4 + 4;
+
+/// Byte offset of the eif_crc32 field within the header.
+const EIF_CRC32_OFFSET: usize = EIF_HEADER_SIZE - 4;
 
 /// EIF section header size: type(2) + flags(2) + size(8) = 12
 const EIF_SECTION_HEADER_SIZE: usize = 12;
@@ -66,12 +69,17 @@ pub enum EifError {
 
 /// Build an EIF image from kernel, initrd, and command line.
 ///
+/// `default_mem` is the enclave memory in bytes, `default_cpus` is the vCPU count.
+/// These are written into the EIF header for the NE hypervisor.
+///
 /// Returns the assembled EIF blob ready to be loaded into enclave memory.
 /// All multi-byte fields are big-endian.
 pub fn build_eif(
     kernel_path: &Path,
     initrd_path: &Path,
     cmdline: &str,
+    default_mem: u64,
+    default_cpus: u64,
 ) -> Result<Vec<u8>, EifError> {
     let kernel_data = fs::read(kernel_path).map_err(EifError::ReadKernel)?;
     if kernel_data.is_empty() {
@@ -80,7 +88,7 @@ pub fn build_eif(
     let initrd_data = fs::read(initrd_path).map_err(EifError::ReadInitrd)?;
     let cmdline_data = cmdline.as_bytes();
 
-    let num_sections: u32 = 3;
+    let num_sections: u16 = 3;
 
     // Calculate total image size
     let sections_size = (EIF_SECTION_HEADER_SIZE * num_sections as usize)
@@ -95,8 +103,9 @@ pub fn build_eif(
     eif.extend_from_slice(&EIF_MAGIC);
     eif.extend_from_slice(&EIF_HDR_VERSION.to_be_bytes());
     eif.extend_from_slice(&EIF_DEFAULT_FLAGS.to_be_bytes());
-    eif.extend_from_slice(&0u64.to_be_bytes()); // default_memory
-    eif.extend_from_slice(&0u64.to_be_bytes()); // default_cpus
+    eif.extend_from_slice(&default_mem.to_be_bytes());
+    eif.extend_from_slice(&default_cpus.to_be_bytes());
+    eif.extend_from_slice(&0u16.to_be_bytes()); // reserved
     eif.extend_from_slice(&num_sections.to_be_bytes());
 
     // Compute section offsets
@@ -126,8 +135,7 @@ pub fn build_eif(
 
     // unused (4 bytes)
     eif.extend_from_slice(&0u32.to_be_bytes());
-    // eif_crc32 placeholder (4 bytes)
-    let eif_crc32_offset = eif.len();
+    // eif_crc32 placeholder (4 bytes) — filled in after all sections are written
     eif.extend_from_slice(&0u32.to_be_bytes());
 
     debug_assert_eq!(eif.len(), EIF_HEADER_SIZE);
@@ -137,11 +145,12 @@ pub fn build_eif(
     write_section(&mut eif, EIF_SECTION_CMDLINE, cmdline_data);
     write_section(&mut eif, EIF_SECTION_RAMDISK, &initrd_data);
 
-    // Compute overall EIF CRC32 (over entire image, with crc32 field zeroed)
+    // Compute EIF CRC32 over the entire image, excluding the 4-byte CRC field itself.
     let mut hasher = Crc32Hasher::new();
-    hasher.update(&eif);
+    hasher.update(&eif[..EIF_CRC32_OFFSET]);
+    hasher.update(&eif[EIF_CRC32_OFFSET + 4..]);
     let crc = hasher.finalize();
-    eif[eif_crc32_offset..eif_crc32_offset + 4].copy_from_slice(&crc.to_be_bytes());
+    eif[EIF_CRC32_OFFSET..EIF_CRC32_OFFSET + 4].copy_from_slice(&crc.to_be_bytes());
 
     Ok(eif)
 }
@@ -164,21 +173,24 @@ mod tests {
         let kernel_path = dir.path().join("kernel");
         let initrd_path = dir.path().join("initrd");
 
-        // Write minimal test data
         fs::write(&kernel_path, b"FAKE_KERNEL_DATA_1234").unwrap();
         fs::write(&initrd_path, b"FAKE_INITRD_DATA_5678").unwrap();
 
-        let eif = build_eif(&kernel_path, &initrd_path, "console=ttyS0").unwrap();
+        let mem = 256 * 1024 * 1024; // 256 MiB
+        let cpus = 2;
+        let eif = build_eif(&kernel_path, &initrd_path, "console=ttyS0", mem, cpus).unwrap();
 
         // Verify magic
         assert_eq!(&eif[0..4], &EIF_MAGIC);
         // Verify version (big-endian)
         assert_eq!(u16::from_be_bytes([eif[4], eif[5]]), EIF_HDR_VERSION);
-        // Verify num_sections (u32, big-endian, at offset 24)
-        assert_eq!(
-            u32::from_be_bytes([eif[24], eif[25], eif[26], eif[27]]),
-            3
-        );
+        // Verify default_mem (big-endian u64 at offset 8)
+        assert_eq!(u64::from_be_bytes(eif[8..16].try_into().unwrap()), mem);
+        // Verify default_cpus (big-endian u64 at offset 16)
+        assert_eq!(u64::from_be_bytes(eif[16..24].try_into().unwrap()), cpus);
+        // Verify reserved(u16) + num_sections(u16) at offset 24
+        assert_eq!(u16::from_be_bytes([eif[24], eif[25]]), 0); // reserved
+        assert_eq!(u16::from_be_bytes([eif[26], eif[27]]), 3); // num_sections
         // Verify header size
         assert_eq!(EIF_HEADER_SIZE, 548);
         // Verify total size is reasonable
@@ -188,6 +200,12 @@ mod tests {
             u16::from_be_bytes([eif[EIF_HEADER_SIZE], eif[EIF_HEADER_SIZE + 1]]),
             EIF_SECTION_KERNEL
         );
+        // Verify CRC32 is valid (recompute excluding CRC field)
+        let stored_crc = u32::from_be_bytes(eif[EIF_CRC32_OFFSET..EIF_CRC32_OFFSET + 4].try_into().unwrap());
+        let mut hasher = Crc32Hasher::new();
+        hasher.update(&eif[..EIF_CRC32_OFFSET]);
+        hasher.update(&eif[EIF_CRC32_OFFSET + 4..]);
+        assert_eq!(hasher.finalize(), stored_crc);
     }
 
     #[test]
@@ -224,7 +242,7 @@ mod tests {
         fs::write(&kernel_path, b"").unwrap();
         fs::write(&initrd_path, b"initrd").unwrap();
 
-        let result = build_eif(&kernel_path, &initrd_path, "");
+        let result = build_eif(&kernel_path, &initrd_path, "", 256 * 1024 * 1024, 2);
         assert!(matches!(result, Err(EifError::EmptyKernel)));
     }
 }

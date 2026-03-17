@@ -79,18 +79,22 @@ fn test_eif_builder_basic() {
     fs::write(&kernel_path, b"FAKE_KERNEL_DATA_FOR_TESTING").unwrap();
     fs::write(&initrd_path, b"FAKE_INITRD_DATA_FOR_TESTING").unwrap();
 
-    let eif = eif::build_eif(&kernel_path, &initrd_path, "console=ttyS0 reboot=k panic=1")
-        .unwrap();
+    let eif = eif::build_eif(
+        &kernel_path,
+        &initrd_path,
+        "console=ttyS0 reboot=k panic=1",
+        256 * 1024 * 1024,
+        2,
+    )
+    .unwrap();
 
     // Check magic bytes
     assert_eq!(&eif[0..4], &[0x2e, 0x65, 0x69, 0x66]);
     // Check version (big-endian u16)
     assert_eq!(u16::from_be_bytes([eif[4], eif[5]]), 4);
-    // Check num_sections is 3 (big-endian u32 at offset 24)
-    assert_eq!(
-        u32::from_be_bytes([eif[24], eif[25], eif[26], eif[27]]),
-        3
-    );
+    // Check reserved(u16) + num_sections(u16) at offset 24
+    assert_eq!(u16::from_be_bytes([eif[24], eif[25]]), 0); // reserved
+    assert_eq!(u16::from_be_bytes([eif[26], eif[27]]), 3); // num_sections
     // Check total size is reasonable
     assert!(eif.len() > 548); // > header size
 }
@@ -104,7 +108,7 @@ fn test_eif_builder_empty_kernel() {
     fs::write(&kernel_path, b"").unwrap();
     fs::write(&initrd_path, b"initrd").unwrap();
 
-    let result = eif::build_eif(&kernel_path, &initrd_path, "");
+    let result = eif::build_eif(&kernel_path, &initrd_path, "", 256 * 1024 * 1024, 2);
     assert!(result.is_err());
 }
 
@@ -116,7 +120,7 @@ fn test_eif_builder_missing_kernel() {
 
     fs::write(&initrd_path, b"initrd").unwrap();
 
-    let result = eif::build_eif(&kernel_path, &initrd_path, "");
+    let result = eif::build_eif(&kernel_path, &initrd_path, "", 256 * 1024 * 1024, 2);
     assert!(result.is_err());
 }
 
@@ -255,6 +259,6 @@ fn test_build_and_boot_enclave() {
     .expect("Failed to build and boot enclave");
 
     let vmm = enclave_vmm.lock().unwrap();
-    assert!(vmm.cid > 0);
-    eprintln!("Enclave CID: {}", vmm.cid);
+    assert!(vmm.enclave_cid.unwrap_or(0) > 0);
+    eprintln!("Enclave CID: {}", vmm.enclave_cid.unwrap());
 }

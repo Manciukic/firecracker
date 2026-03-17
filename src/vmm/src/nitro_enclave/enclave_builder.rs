@@ -80,8 +80,16 @@ pub fn build_and_boot_enclave(
             .boot_args
             .as_deref()
             .unwrap_or("");
+        let default_mem = mib_to_bytes(vm_resources.machine_config.mem_size_mib) as u64;
+        let default_cpus = vm_resources.machine_config.vcpu_count as u64;
         info!("Building EIF from kernel={kernel_path} initrd={initrd_path}");
-        eif::build_eif(Path::new(kernel_path), Path::new(initrd_path), boot_args)?
+        eif::build_eif(
+            Path::new(kernel_path),
+            Path::new(initrd_path),
+            boot_args,
+            default_mem,
+            default_cpus,
+        )?
     };
     info!("EIF ready: {} bytes", eif_data.len());
 
