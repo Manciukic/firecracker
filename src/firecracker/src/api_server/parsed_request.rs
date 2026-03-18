@@ -195,9 +195,7 @@ impl ParsedRequest {
                     Self::success_response_with_data(hinting_status)
                 }
                 VmmData::InstanceInformation(info) => Self::success_response_with_data(info),
-                VmmData::EnclaveConfiguration(config) => {
-                    Self::success_response_with_data(config)
-                }
+                VmmData::EnclaveConfiguration(config) => Self::success_response_with_data(config),
                 VmmData::VmmVersion(version) => Self::success_response_with_data(
                     &serde_json::json!({ "firecracker_version": version.as_str() }),
                 ),

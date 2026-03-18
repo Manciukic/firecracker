@@ -23,7 +23,7 @@ use pci::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use vm_allocator::{AddressAllocator, AllocPolicy, RangeInclusive};
-use vm_memory::{Address, Bytes, ByteValued, GuestAddress, Le32};
+use vm_memory::{Address, ByteValued, Bytes, GuestAddress, Le32};
 use vmm_sys_util::errno;
 use vmm_sys_util::eventfd::EventFd;
 

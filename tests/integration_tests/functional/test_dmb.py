@@ -160,9 +160,7 @@ def test_dmb_snapshot_restore(uvm_plain_any, microvm_factory):
 
     # Write known data to the block device through DMB path
     test_microvm.ssh.run("dd if=/dev/urandom of=/tmp/testdata bs=1K count=64")
-    _, before_md5, _ = test_microvm.ssh.run(
-        "md5sum /tmp/testdata | awk '{print $1}'"
-    )
+    _, before_md5, _ = test_microvm.ssh.run("md5sum /tmp/testdata | awk '{print $1}'")
     test_microvm.ssh.run("dd if=/tmp/testdata of=/dev/vdb bs=1K count=64")
     test_microvm.ssh.run("sync")
 
@@ -219,9 +217,7 @@ def test_dmb_snapshot_write_after_restore(uvm_plain_any, microvm_factory):
 
     # Write new data after restore and verify integrity
     restored_vm.ssh.run("dd if=/dev/urandom of=/tmp/newdata bs=1K count=64")
-    _, expected_md5, _ = restored_vm.ssh.run(
-        "md5sum /tmp/newdata | awk '{print $1}'"
-    )
+    _, expected_md5, _ = restored_vm.ssh.run("md5sum /tmp/newdata | awk '{print $1}'")
     restored_vm.ssh.run("dd if=/tmp/newdata of=/dev/vdb bs=1K count=64")
     restored_vm.ssh.run("sync")
     restored_vm.ssh.run("dd if=/dev/vdb of=/tmp/newdata_read bs=1K count=64")

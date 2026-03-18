@@ -212,10 +212,7 @@ fn test_build_and_boot_enclave() {
         let current = fc_root.join("build/current_artifacts");
         let content = fs::read_to_string(&current)
             .unwrap_or_else(|e| panic!("Cannot read {}: {e}", current.display()));
-        fc_root
-            .join(content.trim())
-            .to_string_lossy()
-            .into_owned()
+        fc_root.join(content.trim()).to_string_lossy().into_owned()
     });
     let artifact_path = std::path::Path::new(&artifact_dir);
 
