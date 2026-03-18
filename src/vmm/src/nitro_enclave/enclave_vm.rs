@@ -56,6 +56,7 @@ pub struct EnclaveVm {
     memory_regions: Vec<GuestRegionMmap>,
     vcpu_ids: Vec<u32>,
     enclave_cid: Option<u64>,
+    debug_mode: bool,
 }
 
 impl EnclaveVm {
@@ -70,6 +71,7 @@ impl EnclaveVm {
             memory_regions: Vec::new(),
             vcpu_ids: Vec::new(),
             enclave_cid: None,
+            debug_mode: false,
         })
     }
 
@@ -137,6 +139,7 @@ impl EnclaveVm {
             .start(debug, cid)
             .map_err(EnclaveVmError::StartEnclave)?;
         self.enclave_cid = Some(assigned_cid);
+        self.debug_mode = debug;
         Ok(assigned_cid)
     }
 
@@ -153,5 +156,10 @@ impl EnclaveVm {
     /// Get the list of vCPU IDs assigned to this enclave.
     pub fn vcpu_ids(&self) -> &[u32] {
         &self.vcpu_ids
+    }
+
+    /// Whether the enclave was started in debug mode.
+    pub fn debug_mode(&self) -> bool {
+        self.debug_mode
     }
 }

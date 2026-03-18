@@ -28,7 +28,7 @@ use super::request::pmem::parse_put_pmem;
 use super::request::snapshot::{parse_patch_vm_state, parse_put_snapshot};
 use super::request::version::parse_get_version;
 use super::request::vsock::parse_put_vsock;
-use crate::api_server::request::enclave::parse_put_enclave;
+use crate::api_server::request::enclave::{parse_get_enclave, parse_put_enclave};
 use crate::api_server::request::hotplug::memory::{
     parse_get_memory_hotplug, parse_patch_memory_hotplug, parse_put_memory_hotplug,
 };
@@ -87,6 +87,7 @@ impl TryFrom<&Request> for ParsedRequest {
             (Method::Get, "vm", None) if path_tokens.next() == Some("config") => {
                 Ok(ParsedRequest::new_sync(VmmAction::GetFullVmConfig))
             }
+            (Method::Get, "enclave", None) => parse_get_enclave(),
             (Method::Get, "machine-config", None) => parse_get_machine_config(),
             (Method::Get, "mmds", None) => parse_get_mmds(),
             (Method::Get, "hotplug", None) if path_tokens.next() == Some("memory") => {
@@ -194,6 +195,9 @@ impl ParsedRequest {
                     Self::success_response_with_data(hinting_status)
                 }
                 VmmData::InstanceInformation(info) => Self::success_response_with_data(info),
+                VmmData::EnclaveConfiguration(config) => {
+                    Self::success_response_with_data(config)
+                }
                 VmmData::VmmVersion(version) => Self::success_response_with_data(
                     &serde_json::json!({ "firecracker_version": version.as_str() }),
                 ),
@@ -347,6 +351,7 @@ pub mod tests {
     use vmm::resources::VmmConfig;
     use vmm::rpc_interface::VmmActionError;
     use vmm::vmm_config::balloon::{BalloonDeviceConfig, BalloonStats};
+    use vmm::vmm_config::enclave::EnclaveConfig;
     use vmm::vmm_config::instance_info::InstanceInfo;
     use vmm::vmm_config::machine_config::MachineConfig;
 
@@ -612,6 +617,9 @@ pub mod tests {
                     &serde_json::json!({ "firecracker_version": version.as_str() }).to_string(),
                     200,
                 ),
+                VmmData::EnclaveConfiguration(cfg) => {
+                    http_response(&serde_json::to_string(cfg).unwrap(), 200)
+                }
             };
             let response = ParsedRequest::convert_to_response(&data);
             response.write_all(&mut buf).unwrap();
@@ -633,6 +641,7 @@ pub mod tests {
         verify_ok_response_with(VmmData::MmdsValue(serde_json::from_str("{}").unwrap()));
         verify_ok_response_with(VmmData::InstanceInformation(InstanceInfo::default()));
         verify_ok_response_with(VmmData::VmmVersion(String::default()));
+        verify_ok_response_with(VmmData::EnclaveConfiguration(EnclaveConfig::default()));
 
         // Error.
         let error = VmmActionError::StartMicrovm(StartMicrovmError::MissingKernelConfig);

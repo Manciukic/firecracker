@@ -125,6 +125,14 @@ impl Vm {
         }
     }
 
+    /// Returns a reference to the inner enclave VM. Panics if called on a KVM VM.
+    pub fn as_enclave(&self) -> &EnclaveVm {
+        match self {
+            Vm::Enclave(e) => e,
+            Vm::Kvm(_) => panic!("as_enclave() called on non-Enclave Vm"),
+        }
+    }
+
     /// Gets a reference to this VM's [`GuestMemoryMmap`] object.
     /// Only available for KVM VMs.
     pub fn guest_memory(&self) -> &GuestMemoryMmap {

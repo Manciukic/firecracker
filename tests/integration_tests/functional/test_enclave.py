@@ -87,6 +87,51 @@ def _configure_and_start_enclave(vm, eif_path, debug_mode=True):
 
 
 @requires_ne
+def test_enclave_get_config(microvm_factory):
+    """Verify GET /enclave returns effective config pre- and post-boot."""
+    vm = _spawn_enclave_vm(microvm_factory, EIF_PATH)
+
+    ne_cpus = _get_ne_cpus()
+    cpu_ids = ne_cpus[:2] if ne_cpus else None
+    vcpu_count = len(cpu_ids) if cpu_ids else 2
+
+    vm.api.machine_config.put(
+        vcpu_count=vcpu_count,
+        mem_size_mib=256,
+        huge_pages="2M",
+    )
+    vm.api.boot.put(
+        kernel_image_path=vm.create_jailed_resource(EIF_PATH),
+    )
+    enclave_kwargs = {"debug_mode": True}
+    if cpu_ids:
+        enclave_kwargs["cpu_ids"] = cpu_ids
+    vm.api.enclave.put(**enclave_kwargs)
+
+    # Pre-boot: GET /enclave returns what was configured.
+    response = vm.api.enclave.get()
+    pre_boot = response.json()
+    assert pre_boot["debug_mode"] is True
+    if cpu_ids:
+        assert pre_boot["cpu_ids"] == cpu_ids
+
+    # Start the enclave.
+    vm.api.actions.put(action_type="InstanceStart")
+
+    # Post-boot: GET /enclave returns effective values.
+    response = vm.api.enclave.get()
+    post_boot = response.json()
+    assert post_boot["debug_mode"] is True
+    assert post_boot["enclave_cid"] is not None
+    assert isinstance(post_boot["enclave_cid"], int)
+    assert post_boot["enclave_cid"] >= 3
+    if cpu_ids:
+        assert post_boot["cpu_ids"] == cpu_ids
+
+    vm.kill()
+
+
+@requires_ne
 def test_enclave_boot_debug_mode(microvm_factory):
     """Start Firecracker with a pre-built EIF in debug mode via API."""
     vm = _spawn_enclave_vm(microvm_factory, EIF_PATH)

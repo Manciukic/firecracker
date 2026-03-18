@@ -12,6 +12,10 @@ pub(crate) fn parse_put_enclave(body: &Body) -> Result<ParsedRequest, RequestErr
     Ok(ParsedRequest::new_sync(VmmAction::SetEnclaveConfig(config)))
 }
 
+pub(crate) fn parse_get_enclave() -> Result<ParsedRequest, RequestError> {
+    Ok(ParsedRequest::new_sync(VmmAction::GetEnclaveConfig))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

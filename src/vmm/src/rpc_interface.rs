@@ -149,6 +149,8 @@ pub enum VmmAction {
     UpdateMachineConfiguration(MachineConfigUpdate),
     /// Configure enclave settings. This action can only be called before the microVM has booted.
     SetEnclaveConfig(EnclaveConfig),
+    /// Get the enclave configuration (effective values post-boot).
+    GetEnclaveConfig,
 }
 
 /// Wrapper for all errors associated with VMM actions.
@@ -233,6 +235,8 @@ pub enum VmmData {
     VirtioMemStatus(VirtioMemStatus),
     /// The status of the virtio-balloon hinting run
     HintingStatus(HintingStatus),
+    /// The enclave configuration.
+    EnclaveConfiguration(EnclaveConfig),
 }
 
 fn mmds_patch_data(
@@ -487,6 +491,9 @@ impl<'a> PrebootApiController<'a> {
             SetEntropyDevice(config) => self.set_entropy_device(config),
             SetMemoryHotplugDevice(config) => self.set_memory_hotplug_device(config),
             SetEnclaveConfig(config) => self.set_enclave_config(config),
+            GetEnclaveConfig => Ok(VmmData::EnclaveConfiguration(
+                self.vm_resources.enclave.clone().unwrap_or_default(),
+            )),
             // Operations not allowed pre-boot.
             CreateSnapshot(_)
             | FlushMetrics
@@ -715,7 +722,8 @@ impl RuntimeApiController {
         if self.is_enclave() {
             match &request {
                 // These info queries work for both KVM and Enclave.
-                GetVmInstanceInfo | GetVmmVersion | GetVmMachineConfig | FlushMetrics => {}
+                GetVmInstanceInfo | GetVmmVersion | GetVmMachineConfig | GetEnclaveConfig
+                | FlushMetrics => {}
                 // Everything else is KVM-only.
                 other => {
                     return Err(VmmActionError::NotSupported(format!(
@@ -776,6 +784,15 @@ impl RuntimeApiController {
             GetVmmVersion => Ok(VmmData::VmmVersion(
                 self.vmm.lock().expect("Poisoned lock").version(),
             )),
+            GetEnclaveConfig => {
+                let vmm = self.vmm.lock().expect("Poisoned lock");
+                let enclave = vmm.vm.as_enclave();
+                Ok(VmmData::EnclaveConfiguration(EnclaveConfig {
+                    cpu_ids: Some(enclave.vcpu_ids().to_vec()),
+                    debug_mode: enclave.debug_mode(),
+                    enclave_cid: enclave.enclave_cid(),
+                }))
+            }
             PatchMMDS(value) => mmds_patch_data(
                 self.vmm
                     .lock()
