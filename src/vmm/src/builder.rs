@@ -30,10 +30,8 @@ use crate::device_manager::{
     DeviceRestoreArgs,
 };
 use crate::devices::virtio::balloon::Balloon;
-use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::mem::{VIRTIO_MEM_DEFAULT_SLOT_SIZE_MIB, VirtioMem};
-use crate::devices::virtio::net::Net;
 use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
@@ -46,9 +44,11 @@ use crate::resources::VmResources;
 use crate::seccomp::BpfThreadMap;
 use crate::snapshot::Persist;
 use crate::utils::mib_to_bytes;
+use crate::vmm_config::drive::BlockBuilder;
 use crate::vmm_config::instance_info::InstanceInfo;
 use crate::vmm_config::machine_config::MachineConfigError;
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
+use crate::vmm_config::net::NetBuilder;
 use crate::vstate::kvm::{Kvm, KvmError};
 use crate::vstate::memory::GuestRegionMmap;
 #[cfg(target_arch = "aarch64")]
@@ -229,14 +229,14 @@ pub fn build_microvm_for_boot(
         &mut device_manager,
         &vm,
         &mut boot_cmdline,
-        vm_resources.block.devices.iter(),
+        &vm_resources.block,
         event_manager,
     )?;
     attach_net_devices(
         &mut device_manager,
         &vm,
         &mut boot_cmdline,
-        vm_resources.net_builder.iter(),
+        &vm_resources.net_builder,
         event_manager,
     )?;
     attach_pmem_devices(
@@ -254,6 +254,7 @@ pub fn build_microvm_for_boot(
             &mut boot_cmdline,
             unix_vsock,
             event_manager,
+            vm_resources.vsock.get_dmb_size(),
         )?;
     }
 
@@ -264,6 +265,7 @@ pub fn build_microvm_for_boot(
             &mut boot_cmdline,
             entropy,
             event_manager,
+            vm_resources.entropy.get_dmb_size(),
         )?;
     }
 
@@ -610,6 +612,7 @@ fn attach_entropy_device(
     cmdline: &mut LoaderKernelCmdline,
     entropy_device: &Arc<Mutex<Entropy>>,
     event_manager: &mut EventManager,
+    dmb_size: u64,
 ) -> Result<(), AttachDeviceError> {
     let id = entropy_device
         .lock()
@@ -617,13 +620,14 @@ fn attach_entropy_device(
         .id()
         .to_string();
 
-    device_manager.attach_virtio_device(
+    device_manager.attach_virtio_device_with_dmb(
         vm,
         id,
         entropy_device.clone(),
         cmdline,
         event_manager,
         false,
+        dmb_size,
     )
 }
 
@@ -674,14 +678,14 @@ fn attach_virtio_mem_device(
     Ok(())
 }
 
-fn attach_block_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Block>>> + Debug>(
+fn attach_block_devices(
     device_manager: &mut DeviceManager,
     vm: &Arc<Vm>,
     cmdline: &mut LoaderKernelCmdline,
-    blocks: I,
+    block_builder: &BlockBuilder,
     event_manager: &mut EventManager,
 ) -> Result<(), StartMicrovmError> {
-    for block in blocks {
+    for block in block_builder.devices.iter() {
         let (id, is_vhost_user) = {
             let locked = block.lock().expect("Poisoned lock");
             if locked.root_device() {
@@ -696,36 +700,40 @@ fn attach_block_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Block>>> + Debug>(
             }
             (locked.id().to_string(), locked.is_vhost_user())
         };
+        let dmb_size = block_builder.dmb_size(&id);
         // The device mutex mustn't be locked here otherwise it will deadlock.
-        device_manager.attach_virtio_device(
+        device_manager.attach_virtio_device_with_dmb(
             vm,
             id,
             block.clone(),
             cmdline,
             event_manager,
             is_vhost_user,
+            dmb_size,
         )?;
     }
     Ok(())
 }
 
-fn attach_net_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Net>>> + Debug>(
+fn attach_net_devices(
     device_manager: &mut DeviceManager,
     vm: &Arc<Vm>,
     cmdline: &mut LoaderKernelCmdline,
-    net_devices: I,
+    net_builder: &NetBuilder,
     event_manager: &mut EventManager,
 ) -> Result<(), StartMicrovmError> {
-    for net_device in net_devices {
+    for net_device in net_builder.iter() {
         let id = net_device.lock().expect("Poisoned lock").id().to_string();
+        let dmb_size = net_builder.dmb_size(&id);
         // The device mutex mustn't be locked here otherwise it will deadlock.
-        device_manager.attach_virtio_device(
+        device_manager.attach_virtio_device_with_dmb(
             vm,
             id,
             net_device.clone(),
             cmdline,
             event_manager,
             false,
+            dmb_size,
         )?;
     }
     Ok(())
@@ -771,10 +779,19 @@ fn attach_unixsock_vsock_device(
     cmdline: &mut LoaderKernelCmdline,
     unix_vsock: &Arc<Mutex<Vsock<VsockUnixBackend>>>,
     event_manager: &mut EventManager,
+    dmb_size: u64,
 ) -> Result<(), AttachDeviceError> {
     let id = String::from(unix_vsock.lock().expect("Poisoned lock").id());
     // The device mutex mustn't be locked here otherwise it will deadlock.
-    device_manager.attach_virtio_device(vm, id, unix_vsock.clone(), cmdline, event_manager, false)
+    device_manager.attach_virtio_device_with_dmb(
+        vm,
+        id,
+        unix_vsock.clone(),
+        cmdline,
+        event_manager,
+        false,
+        dmb_size,
+    )
 }
 
 fn attach_balloon_device(
@@ -918,6 +935,7 @@ pub(crate) mod tests {
                 file_engine_type: None,
 
                 socket: None,
+                dmb_size: None,
             };
 
             block_dev_configs
@@ -929,7 +947,7 @@ pub(crate) mod tests {
             &mut vmm.device_manager,
             &vmm.vm,
             cmdline,
-            block_dev_configs.devices.iter(),
+            &block_dev_configs,
             event_manager,
         )
         .unwrap();
@@ -949,7 +967,7 @@ pub(crate) mod tests {
             &mut vmm.device_manager,
             &vmm.vm,
             cmdline,
-            net_builder.iter(),
+            &net_builder,
             event_manager,
         );
         res.unwrap();
@@ -976,7 +994,7 @@ pub(crate) mod tests {
             &mut vmm.device_manager,
             &vmm.vm,
             cmdline,
-            net_builder.iter(),
+            &net_builder,
             event_manager,
         )
         .unwrap();
@@ -998,6 +1016,7 @@ pub(crate) mod tests {
             cmdline,
             &vsock,
             event_manager,
+            0,
         )
         .unwrap();
 
@@ -1023,6 +1042,7 @@ pub(crate) mod tests {
             cmdline,
             &entropy,
             event_manager,
+            0,
         )
         .unwrap();
 
@@ -1108,6 +1128,7 @@ pub(crate) mod tests {
             guest_mac: None,
             rx_rate_limiter: None,
             tx_rate_limiter: None,
+            dmb_size: None,
         };
 
         let mut cmdline = default_kernel_cmdline();

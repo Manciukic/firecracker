@@ -1,6 +1,7 @@
 // Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
@@ -28,6 +29,9 @@ pub struct NetworkInterfaceConfig {
     pub rx_rate_limiter: Option<RateLimiterConfig>,
     /// Rate Limiter for transmitted packages.
     pub tx_rate_limiter: Option<RateLimiterConfig>,
+    /// Device Memory Buffer (DMB) size in bytes.
+    #[serde(default)]
+    pub dmb_size: Option<u64>,
 }
 
 impl From<&Net> for NetworkInterfaceConfig {
@@ -40,6 +44,7 @@ impl From<&Net> for NetworkInterfaceConfig {
             guest_mac: net.guest_mac().copied(),
             rx_rate_limiter: rx_rl.into_option(),
             tx_rate_limiter: tx_rl.into_option(),
+            dmb_size: None,
         }
     }
 }
@@ -78,6 +83,8 @@ pub enum NetworkInterfaceError {
 #[derive(Debug, Default)]
 pub struct NetBuilder {
     net_devices: Vec<Arc<Mutex<Net>>>,
+    /// DMB sizes per device ID (only for devices with DMB enabled).
+    dmb_sizes: HashMap<String, u64>,
 }
 
 impl NetBuilder {
@@ -86,7 +93,13 @@ impl NetBuilder {
         NetBuilder {
             // List of built network devices.
             net_devices: Vec::new(),
+            dmb_sizes: HashMap::new(),
         }
+    }
+
+    /// Returns the DMB size for a device, or 0 if DMB is not enabled.
+    pub fn dmb_size(&self, id: &str) -> u64 {
+        self.dmb_sizes.get(id).copied().unwrap_or(0)
     }
 
     /// Returns a immutable iterator over the network devices.
@@ -130,9 +143,19 @@ impl NetBuilder {
             self.net_devices.swap_remove(index);
         }
 
+        // Track DMB size for this device.
+        let dmb_size = netif_config.dmb_size;
+        let iface_id = netif_config.iface_id.clone();
+
         // Add new device.
         let net = Arc::new(Mutex::new(Self::create_net(netif_config)?));
         self.net_devices.push(net.clone());
+
+        if let Some(size) = dmb_size {
+            self.dmb_sizes.insert(iface_id, size);
+        } else {
+            self.dmb_sizes.remove(&iface_id);
+        }
 
         Ok(net)
     }
@@ -191,6 +214,7 @@ mod tests {
             guest_mac: Some(MacAddr::from_str(mac).unwrap()),
             rx_rate_limiter: RateLimiterConfig::default().into_option(),
             tx_rate_limiter: RateLimiterConfig::default().into_option(),
+            dmb_size: None,
         }
     }
 
@@ -202,6 +226,7 @@ mod tests {
                 guest_mac: self.guest_mac,
                 rx_rate_limiter: None,
                 tx_rate_limiter: None,
+                dmb_size: self.dmb_size,
             }
         }
     }

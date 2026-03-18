@@ -29,3 +29,5 @@ pub const VIRTIO_F_NOTIFICATION_DATA: u32 = 38;
 pub const VIRTIO_F_NOTIF_CONFIG_DATA: u32 = 39;
 pub const VIRTIO_F_RING_RESET: u32 = 40;
 pub const VIRTIO_F_ADMIN_VQ: u32 = 41;
+pub const VIRTIO_F_DMB: u32 = 42;
+pub const VIRTIO_SHMEM_ID_DMB: u8 = 2;

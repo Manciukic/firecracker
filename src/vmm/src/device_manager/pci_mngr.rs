@@ -65,6 +65,8 @@ pub enum PciManagerError {
     VirtioPciDevice(#[from] VirtioPciDeviceError),
     /// KVM error: {0}
     Kvm(#[from] vmm_sys_util::errno::Error),
+    /// VM error: {0}
+    Vm(#[from] crate::vstate::vm::VmError),
 }
 
 impl PciDevices {
@@ -144,6 +146,7 @@ impl PciDevices {
         id: String,
         device: Arc<Mutex<T>>,
         event_manager: &mut EventManager,
+        dmb_size: u64,
     ) -> Result<(), PciManagerError> {
         // We should only be reaching this point if PCI is enabled
         let pci_segment = self.pci_segment.as_ref().unwrap();
@@ -166,6 +169,7 @@ impl PciDevices {
             device,
             Arc::new(msix_vectors),
             pci_device_bdf.into(),
+            dmb_size,
         )?;
 
         // Allocate bars
@@ -173,6 +177,20 @@ impl PciDevices {
         let resource_allocator = resource_allocator_lock.deref_mut();
 
         virtio_device.allocate_bars(&mut resource_allocator.mmio64_memory);
+
+        // Register DMB as a KVM memory region if enabled
+        if let Some((dmb_size, shm_bar_address, host_addr)) = virtio_device.dmb_info() {
+            let next_slot = vm.next_kvm_slot(1).expect("No KVM slot available for DMB");
+            let memory_region = kvm_bindings::kvm_userspace_memory_region {
+                slot: next_slot,
+                guest_phys_addr: shm_bar_address,
+                memory_size: dmb_size,
+                userspace_addr: host_addr,
+                flags: 0,
+            };
+            vm.set_user_memory_region(memory_region)
+                .map_err(PciManagerError::Vm)?;
+        }
 
         let virtio_device = Arc::new(Mutex::new(virtio_device));
 
@@ -196,12 +214,28 @@ impl PciDevices {
     ) -> Result<(), PciManagerError> {
         let device_type = device.lock().expect("Poisoned lock").device_type();
 
-        let virtio_device = Arc::new(Mutex::new(VirtioPciDevice::new_from_state(
+        let virtio_device = VirtioPciDevice::new_from_state(
             device_id.to_string(),
             vm,
             device.clone(),
             transport_state.clone(),
-        )?));
+        )?;
+
+        // Re-register DMB as a KVM memory region on restore if enabled
+        if let Some((dmb_size, shm_bar_address, host_addr)) = virtio_device.dmb_info() {
+            let next_slot = vm.next_kvm_slot(1).expect("No KVM slot available for DMB");
+            let memory_region = kvm_bindings::kvm_userspace_memory_region {
+                slot: next_slot,
+                guest_phys_addr: shm_bar_address,
+                memory_size: dmb_size,
+                userspace_addr: host_addr,
+                flags: 0,
+            };
+            vm.set_user_memory_region(memory_region)
+                .map_err(PciManagerError::Vm)?;
+        }
+
+        let virtio_device = Arc::new(Mutex::new(virtio_device));
 
         self.attach_common(
             vm,
@@ -691,6 +725,7 @@ mod tests {
                 guest_mac: None,
                 rx_rate_limiter: None,
                 tx_rate_limiter: None,
+                dmb_size: None,
             };
             insert_net_device_with_mmds(
                 &mut vmm,
@@ -705,6 +740,7 @@ mod tests {
                 vsock_id: Some(vsock_dev_id.to_string()),
                 guest_cid: 3,
                 uds_path: tmp_sock_file.as_path().to_str().unwrap().to_string(),
+                dmb_size: None,
             };
             insert_vsock_device(&mut vmm, &mut cmdline, &mut event_manager, vsock_config);
             // Add an entropy device.

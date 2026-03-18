@@ -92,7 +92,13 @@ impl VirtioPciCommonConfig {
         }
     }
 
-    pub fn read(&mut self, offset: u64, data: &mut [u8], device: Arc<Mutex<dyn VirtioDevice>>) {
+    pub fn read(
+        &mut self,
+        offset: u64,
+        data: &mut [u8],
+        device: Arc<Mutex<dyn VirtioDevice>>,
+        transport_features: u64,
+    ) {
         assert!(data.len() <= 8);
 
         match data.len() {
@@ -105,7 +111,7 @@ impl VirtioPciCommonConfig {
                 LittleEndian::write_u16(data, v);
             }
             4 => {
-                let v = self.read_common_config_dword(offset, device);
+                let v = self.read_common_config_dword(offset, device, transport_features);
                 LittleEndian::write_u32(data, v);
             }
             _ => warn!(
@@ -227,7 +233,12 @@ impl VirtioPciCommonConfig {
         }
     }
 
-    fn read_common_config_dword(&self, offset: u64, device: Arc<Mutex<dyn VirtioDevice>>) -> u32 {
+    fn read_common_config_dword(
+        &self,
+        offset: u64,
+        device: Arc<Mutex<dyn VirtioDevice>>,
+        transport_features: u64,
+    ) -> u32 {
         match offset {
             0x00 => self.device_feature_select,
             0x04 => {
@@ -235,7 +246,8 @@ impl VirtioPciCommonConfig {
                 // Only 64 bits of features (2 pages) are defined for now, so limit
                 // device_feature_select to avoid shifting by 64 or more bits.
                 if self.device_feature_select < 2 {
-                    ((locked_device.avail_features() >> (self.device_feature_select * 32))
+                    (((locked_device.avail_features() | transport_features)
+                        >> (self.device_feature_select * 32))
                         & 0xffff_ffff) as u32
                 } else {
                     0
@@ -388,41 +400,41 @@ mod tests {
         // Can set all bits of driver_status.
         regs.write(0x14, &[0x55], dev.clone());
         let mut read_back = vec![0x00];
-        regs.read(0x14, &mut read_back, dev.clone());
+        regs.read(0x14, &mut read_back, dev.clone(), 0);
         assert_eq!(read_back[0], 0x55);
 
         // The config generation register is read only.
         regs.write(0x15, &[0xaa], dev.clone());
         let mut read_back = vec![0x00];
-        regs.read(0x15, &mut read_back, dev.clone());
+        regs.read(0x15, &mut read_back, dev.clone(), 0);
         assert_eq!(read_back[0], 0x55);
 
         // Device features is read-only and passed through from the device.
         regs.write(0x04, &[0, 0, 0, 0], dev.clone());
         let mut read_back = vec![0, 0, 0, 0];
-        regs.read(0x04, &mut read_back, dev.clone());
+        regs.read(0x04, &mut read_back, dev.clone(), 0);
         assert_eq!(LittleEndian::read_u32(&read_back), 0u32);
 
         // Feature select registers are read/write.
         regs.write(0x00, &[1, 2, 3, 4], dev.clone());
         let mut read_back = vec![0, 0, 0, 0];
-        regs.read(0x00, &mut read_back, dev.clone());
+        regs.read(0x00, &mut read_back, dev.clone(), 0);
         assert_eq!(LittleEndian::read_u32(&read_back), 0x0403_0201);
         regs.write(0x08, &[1, 2, 3, 4], dev.clone());
         let mut read_back = vec![0, 0, 0, 0];
-        regs.read(0x08, &mut read_back, dev.clone());
+        regs.read(0x08, &mut read_back, dev.clone(), 0);
         assert_eq!(LittleEndian::read_u32(&read_back), 0x0403_0201);
 
         // 'queue_select' can be read and written.
         regs.write(0x16, &[0xaa, 0x55], dev.clone());
         let mut read_back = vec![0x00, 0x00];
-        regs.read(0x16, &mut read_back, dev.clone());
+        regs.read(0x16, &mut read_back, dev.clone(), 0);
         assert_eq!(read_back[0], 0xaa);
         assert_eq!(read_back[1], 0x55);
 
         // Getting the MSI vector when `queue_select` points to an invalid queue should return
         // NO_VECTOR (0xffff)
-        regs.read(0x1a, &mut read_back, dev.clone());
+        regs.read(0x1a, &mut read_back, dev.clone(), 0);
         assert_eq!(read_back, [0xff, 0xff]);
 
         // Writing the MSI vector of an invalid `queue_select` does not have any effect.
@@ -432,7 +444,7 @@ mod tests {
         regs.write(0x16, &[0x1, 0x0], dev.clone());
         assert_eq!(regs.queue_select, 1);
         regs.write(0x1a, &[0x1, 0x0], dev.clone());
-        regs.read(0x1a, &mut read_back, dev);
+        regs.read(0x1a, &mut read_back, dev, 0);
         assert_eq!(LittleEndian::read_u16(&read_back[..2]), 0x1);
     }
 
@@ -447,15 +459,15 @@ mod tests {
             .unwrap()
             .set_avail_features(0x0000_1312_0000_1110);
 
-        config.read(0x04, features.as_mut_slice(), device.clone());
+        config.read(0x04, features.as_mut_slice(), device.clone(), 0);
         assert_eq!(features, 0x1110);
         // select second page
         config.write(0x0, 1u32.as_slice(), device.clone());
-        config.read(0x04, features.as_mut_slice(), device.clone());
+        config.read(0x04, features.as_mut_slice(), device.clone(), 0);
         assert_eq!(features, 0x1312);
         // Try a third page. It doesn't exist so we should get all 0s
         config.write(0x0, 2u32.as_slice(), device.clone());
-        config.read(0x04, features.as_mut_slice(), device.clone());
+        config.read(0x04, features.as_mut_slice(), device.clone(), 0);
         assert_eq!(features, 0x0);
     }
 
@@ -486,11 +498,11 @@ mod tests {
         let mut device = default_device();
         let mut num_queues = 0u16;
 
-        config.read(0x12, num_queues.as_mut_slice(), device.clone());
+        config.read(0x12, num_queues.as_mut_slice(), device.clone(), 0);
         assert_eq!(num_queues, 2);
         // `num_queues` is read-only
         config.write(0x12, 4u16.as_slice(), device.clone());
-        config.read(0x12, num_queues.as_mut_slice(), device.clone());
+        config.read(0x12, num_queues.as_mut_slice(), device.clone(), 0);
         assert_eq!(num_queues, 2);
     }
 
@@ -500,10 +512,10 @@ mod tests {
         let mut device = default_device();
         let mut status = 0u8;
 
-        config.read(0x14, status.as_mut_slice(), device.clone());
+        config.read(0x14, status.as_mut_slice(), device.clone(), 0);
         assert_eq!(status, 0);
         config.write(0x14, 0x42u8.as_slice(), device.clone());
-        config.read(0x14, status.as_mut_slice(), device.clone());
+        config.read(0x14, status.as_mut_slice(), device.clone(), 0);
         assert_eq!(status, 0x42);
     }
 
@@ -517,13 +529,13 @@ mod tests {
         // Trying to set a vector bigger than that should fail. Observing the
         // failure happens through a subsequent read that should return NO_VECTOR.
         config.write(0x10, 3u16.as_slice(), device.clone());
-        config.read(0x10, vector.as_mut_slice(), device.clone());
+        config.read(0x10, vector.as_mut_slice(), device.clone(), 0);
         assert_eq!(vector, VIRTQ_MSI_NO_VECTOR);
 
         // Any of the 3 valid values should work
         for i in 0u16..3 {
             config.write(0x10, i.as_slice(), device.clone());
-            config.read(0x10, vector.as_mut_slice(), device.clone());
+            config.read(0x10, vector.as_mut_slice(), device.clone(), 0);
             assert_eq!(vector, i);
         }
     }
@@ -537,7 +549,7 @@ mod tests {
 
         for queue_id in 0u16..2 {
             config.write(0x16, queue_id.as_slice(), device.clone());
-            config.read(0x18, len.as_mut_slice(), device.clone());
+            config.read(0x18, len.as_mut_slice(), device.clone(), 0);
             assert_eq!(
                 len,
                 device.lock().unwrap().queues()[queue_id as usize].max_size
@@ -546,7 +558,7 @@ mod tests {
         }
 
         config.write(0x16, 2u16.as_slice(), device.clone());
-        config.read(0x18, len.as_mut_slice(), device.clone());
+        config.read(0x18, len.as_mut_slice(), device.clone(), 0);
         assert_eq!(len, 0);
 
         // Setup size smaller than what is the maximum offered
@@ -557,7 +569,7 @@ mod tests {
                 (max_size[queue_id as usize] - 1).as_slice(),
                 device.clone(),
             );
-            config.read(0x18, len.as_mut_slice(), device.clone());
+            config.read(0x18, len.as_mut_slice(), device.clone(), 0);
             assert_eq!(len, max_size[queue_id as usize] - 1);
         }
     }
@@ -576,13 +588,13 @@ mod tests {
             config.write(0x16, queue_id.as_slice(), device.clone());
 
             config.write(0x1a, 3u16.as_slice(), device.clone());
-            config.read(0x1a, vector.as_mut_slice(), device.clone());
+            config.read(0x1a, vector.as_mut_slice(), device.clone(), 0);
             assert_eq!(vector, VIRTQ_MSI_NO_VECTOR);
 
             // Any of the 3 valid values should work
             for vector_id in 0u16..3 {
                 config.write(0x1a, vector_id.as_slice(), device.clone());
-                config.read(0x1a, vector.as_mut_slice(), device.clone());
+                config.read(0x1a, vector.as_mut_slice(), device.clone(), 0);
                 assert_eq!(vector, vector_id);
             }
         }
@@ -598,17 +610,17 @@ mod tests {
             config.write(0x16, queue_id.as_slice(), device.clone());
 
             // Initially queue should be disabled
-            config.read(0x1c, enabled.as_mut_slice(), device.clone());
+            config.read(0x1c, enabled.as_mut_slice(), device.clone(), 0);
             assert_eq!(enabled, 0);
 
             // Enable queue
             config.write(0x1c, 1u16.as_slice(), device.clone());
-            config.read(0x1c, enabled.as_mut_slice(), device.clone());
+            config.read(0x1c, enabled.as_mut_slice(), device.clone(), 0);
             assert_eq!(enabled, 1);
 
             // According to the specification "The driver MUST NOT write a 0 to queue_enable."
             config.write(0x1c, 0u16.as_slice(), device.clone());
-            config.read(0x1c, enabled.as_mut_slice(), device.clone());
+            config.read(0x1c, enabled.as_mut_slice(), device.clone(), 0);
             assert_eq!(enabled, 1);
         }
     }
@@ -625,12 +637,12 @@ mod tests {
 
         for queue_id in 0u16..2 {
             config.write(0x16, queue_id.as_slice(), device.clone());
-            config.read(0x1e, offset.as_mut_slice(), device.clone());
+            config.read(0x1e, offset.as_mut_slice(), device.clone(), 0);
             assert_eq!(offset, queue_id);
 
             // Writing to it should not have any effect
             config.write(0x1e, 0x42.as_slice(), device.clone());
-            config.read(0x1e, offset.as_mut_slice(), device.clone());
+            config.read(0x1e, offset.as_mut_slice(), device.clone(), 0);
             assert_eq!(offset, queue_id);
         }
     }
@@ -656,8 +668,8 @@ mod tests {
         let mut lo32 = 0u32;
         let mut hi32 = 0u32;
 
-        config.read(offset, lo32.as_mut_slice(), device.clone());
-        config.read(offset + 4, hi32.as_mut_slice(), device.clone());
+        config.read(offset, lo32.as_mut_slice(), device.clone(), 0);
+        config.read(offset + 4, hi32.as_mut_slice(), device.clone(), 0);
 
         (lo32 as u64) | ((hi32 as u64) << 32)
     }
@@ -697,51 +709,51 @@ mod tests {
         device.lock().unwrap().queues_mut()[0].desc_table_address =
             GuestAddress(0x0000_1312_0000_1110);
         let mut buffer = [0u8; 8];
-        config.read(0x20, &mut buffer[..1], device.clone());
+        config.read(0x20, &mut buffer[..1], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x20, &mut buffer[..2], device.clone());
+        config.read(0x20, &mut buffer[..2], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x20, &mut buffer[..8], device.clone());
+        config.read(0x20, &mut buffer[..8], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x20, &mut buffer[..4], device.clone());
+        config.read(0x20, &mut buffer[..4], device.clone(), 0);
         assert_eq!(LittleEndian::read_u32(&buffer[..4]), 0x1110);
-        config.read(0x24, &mut buffer[..4], device.clone());
+        config.read(0x24, &mut buffer[..4], device.clone(), 0);
         assert_eq!(LittleEndian::read_u32(&buffer[..4]), 0x1312);
 
         // 32-bit fields
         config.device_feature_select = 0x42;
         let mut buffer = [0u8; 8];
-        config.read(0, &mut buffer[..1], device.clone());
+        config.read(0, &mut buffer[..1], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0, &mut buffer[..2], device.clone());
+        config.read(0, &mut buffer[..2], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0, &mut buffer[..8], device.clone());
+        config.read(0, &mut buffer[..8], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0, &mut buffer[..4], device.clone());
+        config.read(0, &mut buffer[..4], device.clone(), 0);
         assert_eq!(LittleEndian::read_u32(&buffer[..4]), 0x42);
 
         // 16-bit fields
         let mut buffer = [0u8; 8];
         config.queue_select = 0x42;
-        config.read(0x16, &mut buffer[..1], device.clone());
+        config.read(0x16, &mut buffer[..1], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x16, &mut buffer[..4], device.clone());
+        config.read(0x16, &mut buffer[..4], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x16, &mut buffer[..8], device.clone());
+        config.read(0x16, &mut buffer[..8], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x16, &mut buffer[..2], device.clone());
+        config.read(0x16, &mut buffer[..2], device.clone(), 0);
         assert_eq!(LittleEndian::read_u16(&buffer[..2]), 0x42);
 
         // 8-bit fields
         let mut buffer = [0u8; 8];
         config.driver_status = 0x42;
-        config.read(0x14, &mut buffer[..2], device.clone());
+        config.read(0x14, &mut buffer[..2], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x14, &mut buffer[..4], device.clone());
+        config.read(0x14, &mut buffer[..4], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x14, &mut buffer[..8], device.clone());
+        config.read(0x14, &mut buffer[..8], device.clone(), 0);
         assert_eq!(buffer, [0u8; 8]);
-        config.read(0x14, &mut buffer[..1], device.clone());
+        config.read(0x14, &mut buffer[..1], device.clone(), 0);
         assert_eq!(buffer[0], 0x42);
     }
 }

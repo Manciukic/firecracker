@@ -140,6 +140,9 @@ function build_al_kernel {
     # Create a temporary branch where we can apply patches and then
     # easily discard them
     git checkout -B tmp-$TAG
+    # Discard any leftover working tree changes from a previous failed build
+    git checkout -- .
+    git clean -fd
 
     # Apply any patchset we have for our kernels
     for patchset in ../patches/*; do
@@ -243,15 +246,16 @@ function build_al_kernels {
     PMEM_CONFIG="$PWD/guest_configs/virtio-pmem.config"
     MEM_CONFIG="$PWD/guest_configs/virtio-mem.config"
     VMCLOCK_CONFIG="$PWD/guest_configs/vmclock.config"
+    DMB_CONFIG="$PWD/guest_configs/dmb.config"
 
     if [[ "$KERNEL_VERSION" == @(all|5.10) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG" "$DMB_CONFIG"
     fi
     if [[ $ARCH == "x86_64" && "$KERNEL_VERSION" == @(all|5.10-no-acpi) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG" "$DMB_CONFIG"
     fi
     if [[ "$KERNEL_VERSION" == @(all|6.1) ]]; then
-        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG"
+        build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$VMCLOCK_CONFIG" "$DMB_CONFIG"
     fi
 
     # Build debug kernels
@@ -260,11 +264,11 @@ function build_al_kernels {
     OUTPUT_DIR=$OUTPUT_DIR/debug
     mkdir -pv $OUTPUT_DIR
     if [[ "$KERNEL_VERSION" == @(all|5.10) ]]; then
-        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config" "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG" "$VMCLOCK_CONFIG"
+        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config" "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG" "$VMCLOCK_CONFIG" "$DMB_CONFIG"
         vmlinux_split_debuginfo $OUTPUT_DIR/vmlinux-5.10.*
     fi
     if [[ "$KERNEL_VERSION" == @(all|6.1) ]]; then
-        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config" "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG" "$VMCLOCK_CONFIG"
+        build_al_kernel "$PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config" "$CI_CONFIG" "$PCIE_CONFIG" "$PMEM_CONFIG" "$MEM_CONFIG" "$FTRACE_CONFIG" "$DEBUG_CONFIG" "$VMCLOCK_CONFIG" "$DMB_CONFIG"
         vmlinux_split_debuginfo $OUTPUT_DIR/vmlinux-6.1.*
     fi
 }

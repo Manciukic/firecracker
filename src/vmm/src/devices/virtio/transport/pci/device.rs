@@ -194,6 +194,45 @@ struct VirtioPciCfgCapInfo {
     cap: VirtioPciCfgCap,
 }
 
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct VirtioPciShmCap {
+    cap: VirtioPciCap,
+    offset_hi: Le32,
+    length_hi: Le32,
+}
+// SAFETY: All members are simple numbers and any value is valid.
+unsafe impl ByteValued for VirtioPciShmCap {}
+
+impl PciCapability for VirtioPciShmCap {
+    fn bytes(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    fn id(&self) -> PciCapabilityId {
+        PciCapabilityId::VendorSpecific
+    }
+}
+
+impl VirtioPciShmCap {
+    pub fn new(bar_index: u8, id: u8, offset: u64, length: u64) -> Self {
+        VirtioPciShmCap {
+            cap: VirtioPciCap {
+                cap_len: u8::try_from(std::mem::size_of::<VirtioPciShmCap>()).unwrap()
+                    + VIRTIO_PCI_CAP_LEN_OFFSET,
+                cfg_type: PciCapabilityType::SharedMemory as u8,
+                pci_bar: bar_index,
+                id,
+                padding: [0; 2],
+                offset: Le32::from((offset & 0xffff_ffff) as u32),
+                length: Le32::from((length & 0xffff_ffff) as u32),
+            },
+            offset_hi: Le32::from((offset >> 32) as u32),
+            length_hi: Le32::from((length >> 32) as u32),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum PciVirtioSubclass {
     NonTransitionalBase = 0xff,
@@ -245,6 +284,10 @@ pub struct VirtioPciDeviceState {
     pub pci_dev_state: VirtioPciCommonConfigState,
     pub msix_state: MsixConfigState,
     pub bar_address: u64,
+    #[serde(default)]
+    pub dmb_size: u64,
+    #[serde(default)]
+    pub shm_bar_address: u64,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -290,6 +333,11 @@ pub struct VirtioPciDevice {
 
     // Allocated address for the BAR
     pub bar_address: u64,
+
+    // Device Memory Buffer (DMB) support
+    dmb_size: u64,           // 0 = disabled
+    shm_bar_address: u64,    // BAR 2 address for DMB region
+    transport_features: u64, // Transport-level feature bits (e.g., VIRTIO_F_DMB)
 }
 
 impl Debug for VirtioPciDevice {
@@ -359,6 +407,19 @@ impl VirtioPciDevice {
             CAPABILITY_BAR_SIZE,
         );
 
+        // Allocate DMB BAR (BAR 2) if DMB is enabled
+        if self.dmb_size > 0 {
+            let dmb_bar_size = self.dmb_size.next_power_of_two();
+            let shm_bar_addr = mmio64_allocator
+                .allocate(dmb_bar_size, dmb_bar_size, AllocPolicy::FirstMatch)
+                .unwrap()
+                .start();
+
+            self.configuration
+                .add_pci_bar(VIRTIO_SHM_BAR_INDEX, shm_bar_addr, dmb_bar_size);
+            self.shm_bar_address = shm_bar_addr;
+        }
+
         // Once the BARs are allocated, the capabilities can be added to the PCI configuration.
         self.add_pci_capabilities();
         self.bar_address = virtio_pci_bar_addr;
@@ -371,6 +432,7 @@ impl VirtioPciDevice {
         device: Arc<Mutex<dyn VirtioDevice>>,
         msix_vectors: Arc<MsixVectorGroup>,
         pci_device_bdf: u32,
+        dmb_size: u64,
     ) -> Result<Self, VirtioPciDeviceError> {
         let num_queues = device.lock().expect("Poisoned lock").queues().len();
 
@@ -399,6 +461,24 @@ impl VirtioPciDevice {
             msix_vectors,
         ));
 
+        let transport_features = if dmb_size > 0 {
+            // DMB requires ACCESS_PLATFORM so the guest kernel uses the DMA API
+            // (and thus our DMB DMA ops override) instead of virt_to_phys().
+            (1u64 << crate::devices::virtio::generated::virtio_config::VIRTIO_F_DMB)
+                | (1u64
+                    << crate::devices::virtio::generated::virtio_config::VIRTIO_F_ACCESS_PLATFORM)
+        } else {
+            0
+        };
+
+        // When DMB is enabled, create a dedicated memory region for device DMA.
+        // The device will use offsets into this region starting at address 0.
+        let effective_memory = if dmb_size > 0 {
+            Self::create_dmb_memory(dmb_size)
+        } else {
+            memory
+        };
+
         let virtio_pci_device = VirtioPciDevice {
             id,
             sub_id: None,
@@ -408,12 +488,35 @@ impl VirtioPciDevice {
             device,
             device_activated: Arc::new(AtomicBool::new(false)),
             virtio_interrupt: Some(interrupt),
-            memory,
+            memory: effective_memory,
             cap_pci_cfg_info: VirtioPciCfgCapInfo::default(),
             bar_address: 0,
+            dmb_size,
+            shm_bar_address: 0,
+            transport_features,
         };
 
         Ok(virtio_pci_device)
+    }
+
+    /// Create an anonymous mmap-backed GuestMemoryMmap for DMB at address 0.
+    fn create_dmb_memory(size: u64) -> GuestMemoryMmap {
+        use vm_memory::GuestRegionMmap;
+        use vm_memory::mmap::MmapRegionBuilder;
+
+        use crate::vstate::memory::GuestRegionMmapExt;
+
+        let mmap_region = MmapRegionBuilder::new_with_bitmap(size as usize, None)
+            .with_mmap_prot(libc::PROT_READ | libc::PROT_WRITE)
+            .with_mmap_flags(libc::MAP_ANONYMOUS | libc::MAP_PRIVATE)
+            .build()
+            .expect("Failed to create DMB mmap region");
+        let guest_region = GuestRegionMmap::new(mmap_region, GuestAddress(0))
+            .expect("Failed to create DMB guest region");
+        // Use slot 0 - this is a standalone memory region not tracked by KVM slot management
+        let ext_region = GuestRegionMmapExt::dram_from_mmap_region(guest_region, 0);
+        GuestMemoryMmap::from_regions(vec![ext_region])
+            .expect("Failed to create DMB GuestMemoryMmap")
     }
 
     pub fn new_from_state(
@@ -444,6 +547,23 @@ impl VirtioPciDevice {
             vectors,
         ));
 
+        let dmb_size = state.dmb_size;
+        let transport_features = if dmb_size > 0 {
+            // DMB requires ACCESS_PLATFORM so the guest kernel uses the DMA API
+            // (and thus our DMB DMA ops override) instead of virt_to_phys().
+            (1u64 << crate::devices::virtio::generated::virtio_config::VIRTIO_F_DMB)
+                | (1u64
+                    << crate::devices::virtio::generated::virtio_config::VIRTIO_F_ACCESS_PLATFORM)
+        } else {
+            0
+        };
+
+        let effective_memory = if dmb_size > 0 {
+            Self::create_dmb_memory(dmb_size)
+        } else {
+            vm.guest_memory().clone()
+        };
+
         let virtio_pci_device = VirtioPciDevice {
             id,
             sub_id: None,
@@ -453,9 +573,12 @@ impl VirtioPciDevice {
             device,
             device_activated: Arc::new(AtomicBool::new(state.device_activated)),
             virtio_interrupt: Some(interrupt),
-            memory: vm.guest_memory().clone(),
+            memory: effective_memory,
             cap_pci_cfg_info,
             bar_address: state.bar_address,
+            dmb_size,
+            shm_bar_address: state.shm_bar_address,
+            transport_features,
         };
 
         if state.device_activated {
@@ -486,6 +609,19 @@ impl VirtioPciDevice {
 
     pub fn config_bar_addr(&self) -> u64 {
         self.configuration.get_bar_addr(VIRTIO_BAR_INDEX as usize)
+    }
+
+    /// Returns DMB configuration if enabled: (dmb_size, shm_bar_address, host_addr).
+    pub fn dmb_info(&self) -> Option<(u64, u64, u64)> {
+        if self.dmb_size == 0 {
+            return None;
+        }
+        use vm_memory::{GuestMemory, GuestMemoryRegion, MemoryRegionAddress};
+        let region = self.memory.iter().next().unwrap();
+        let host_addr = region
+            .get_host_address(MemoryRegionAddress(0))
+            .expect("Failed to get DMB host address") as u64;
+        Some((self.dmb_size, self.shm_bar_address, host_addr))
     }
 
     fn add_pci_capabilities(&mut self) {
@@ -524,6 +660,17 @@ impl VirtioPciDevice {
         self.cap_pci_cfg_info.offset =
             self.configuration.add_capability(&configuration_cap) + VIRTIO_PCI_CAP_OFFSET;
         self.cap_pci_cfg_info.cap = configuration_cap;
+
+        // Add DMB shared memory capability if enabled
+        if self.dmb_size > 0 {
+            let shm_cap = VirtioPciShmCap::new(
+                VIRTIO_SHM_BAR_INDEX.try_into().unwrap(),
+                crate::devices::virtio::generated::virtio_config::VIRTIO_SHMEM_ID_DMB,
+                0, // offset within BAR
+                self.dmb_size,
+            );
+            self.configuration.add_capability(&shm_cap);
+        }
 
         if let Some(interrupt) = &self.virtio_interrupt {
             let msix_cap = MsixCap::new(
@@ -641,6 +788,8 @@ impl VirtioPciDevice {
                 .expect("Poisoned lock")
                 .state(),
             bar_address: self.bar_address,
+            dmb_size: self.dmb_size,
+            shm_bar_address: self.shm_bar_address,
         }
     }
 }
@@ -803,10 +952,12 @@ impl PciDevice for VirtioPciDevice {
 
     fn read_bar(&mut self, _base: u64, offset: u64, data: &mut [u8]) {
         match offset {
-            o if o < COMMON_CONFIG_BAR_OFFSET + COMMON_CONFIG_SIZE => {
-                self.common_config
-                    .read(o - COMMON_CONFIG_BAR_OFFSET, data, self.device.clone())
-            }
+            o if o < COMMON_CONFIG_BAR_OFFSET + COMMON_CONFIG_SIZE => self.common_config.read(
+                o - COMMON_CONFIG_BAR_OFFSET,
+                data,
+                self.device.clone(),
+                self.transport_features,
+            ),
             o if (ISR_CONFIG_BAR_OFFSET..ISR_CONFIG_BAR_OFFSET + ISR_CONFIG_SIZE).contains(&o) => {
                 // We don't actually support legacy INT#x interrupts for VirtIO PCI devices
                 warn!("pci: read access to unsupported ISR status field");

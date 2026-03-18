@@ -594,6 +594,7 @@ mod tests {
             guest_mac: Some(MacAddr::from_str("01:23:45:67:89:0a").unwrap()),
             rx_rate_limiter: Some(RateLimiterConfig::default()),
             tx_rate_limiter: Some(RateLimiterConfig::default()),
+            dmb_size: None,
         }
     }
 
@@ -619,6 +620,7 @@ mod tests {
                 file_engine_type: None,
 
                 socket: None,
+                dmb_size: None,
             },
             tmp_file,
         )

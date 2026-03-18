@@ -1291,6 +1291,7 @@ mod tests {
                 file_engine_type: None,
 
                 socket: None,
+                dmb_size: None,
             },
         )));
         check_unsupported(runtime_request(VmmAction::InsertNetworkDevice(
@@ -1300,6 +1301,7 @@ mod tests {
                 guest_mac: None,
                 rx_rate_limiter: None,
                 tx_rate_limiter: None,
+                dmb_size: None,
             },
         )));
         check_unsupported(runtime_request(VmmAction::SetVsockDevice(
@@ -1307,6 +1309,7 @@ mod tests {
                 vsock_id: Some(String::new()),
                 guest_cid: 0,
                 uds_path: String::new(),
+                dmb_size: None,
             },
         )));
         check_unsupported(runtime_request(VmmAction::SetBalloonDevice(
@@ -1317,6 +1320,7 @@ mod tests {
                 vsock_id: Some(String::new()),
                 guest_cid: 0,
                 uds_path: String::new(),
+                dmb_size: None,
             },
         )));
         check_unsupported(runtime_request(VmmAction::SetMmdsConfiguration(

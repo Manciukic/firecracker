@@ -1,0 +1,261 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <graf@amazon.com>
+Date: Tue, 27 Jan 2026 10:22:18 +0100
+Subject: [PATCH] virtio-pci: Add Device Memory Buffer (DMB) support
+
+Backport of DMB support for the kernel. Uses dma_map_ops override
+to redirect all device DMA into the DMB shared memory region.
+
+When the DMB feature flag is present, the driver overrides the PCI device
+DMA ops with custom ops that allocate from the DMB gen_pool. All DMA
+addresses become offsets into the shared memory BAR region.
+
+Signed-off-by: Alexander Graf <graf@amazon.com>
+---
+--- a/drivers/virtio/Kconfig
++++ b/drivers/virtio/Kconfig
+@@ -22,6 +22,8 @@
+ 	tristate "PCI driver for virtio devices"
+ 	depends on PCI
+ 	select VIRTIO
++	select GENERIC_ALLOCATOR
++	select DMA_OPS
+ 	help
+ 	  This driver provides support for virtio based paravirtual device
+ 	  drivers over PCI.  This requires that your VMM has appropriate PCI
+--- a/drivers/virtio/virtio_pci_common.h
++++ b/drivers/virtio/virtio_pci_common.h
+@@ -27,6 +27,8 @@
+ #include <linux/virtio_pci.h>
+ #include <linux/highmem.h>
+ #include <linux/spinlock.h>
++#include <linux/genalloc.h>
++#include <linux/mutex.h>
+ 
+ struct virtio_pci_vq_info {
+ 	/* the actual virtqueue */
+@@ -94,6 +96,12 @@
+ 	/* Whether we have vector per vq */
+ 	bool per_vq_vectors;
+ 
++	/* Device Memory Buffer (DMB) support */
++	void __iomem *dmb_mem;
++	struct gen_pool *dmb_pool;
++	struct list_head dmb_mappings;
++	spinlock_t dmb_lock;
++
+ 	struct virtqueue *(*setup_vq)(struct virtio_pci_device *vp_dev,
+ 				      struct virtio_pci_vq_info *info,
+ 				      unsigned idx,
+--- a/drivers/virtio/virtio_pci_modern.c
++++ b/drivers/virtio/virtio_pci_modern.c
+@@ -15,6 +15,7 @@
+  */
+ 
+ #include <linux/delay.h>
++#include <linux/dma-map-ops.h>
+ #define VIRTIO_PCI_NO_LEGACY
+ #define VIRTIO_RING_NO_LEGACY
+ #include "virtio_pci_common.h"
+@@ -159,8 +160,126 @@
+ 	if ((features & BIT_ULL(VIRTIO_F_SR_IOV)) &&
+ 			pci_find_ext_capability(pci_dev, PCI_EXT_CAP_ID_SRIOV))
+ 		__virtio_set_bit(vdev, VIRTIO_F_SR_IOV);
++
++	if (features & BIT_ULL(VIRTIO_F_DMB))
++		__virtio_set_bit(vdev, VIRTIO_F_DMB);
++}
++
++/* DMB DMA mapping helpers */
++struct vp_dmb_mapping {
++	struct list_head list;
++	dma_addr_t handle;
++	void *va;
++	size_t size;
++};
++
++static void *vp_dmb_dma_alloc(struct device *dev, size_t size,
++			       dma_addr_t *dma_handle, gfp_t gfp,
++			       unsigned long attrs)
++{
++	struct pci_dev *pci_dev = to_pci_dev(dev);
++	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++	ulong addr;
++
++	if (!vp_dev || !vp_dev->dmb_pool)
++		return NULL;
++
++	size = ALIGN(size, SMP_CACHE_BYTES);
++	addr = gen_pool_alloc(vp_dev->dmb_pool, size);
++	if (!addr)
++		return NULL;
++
++	*dma_handle = addr - (ulong)vp_dev->dmb_mem;
++	return (void *)addr;
+ }
+ 
++static void vp_dmb_dma_free(struct device *dev, size_t size, void *vaddr,
++			     dma_addr_t dma_handle, unsigned long attrs)
++{
++	struct pci_dev *pci_dev = to_pci_dev(dev);
++	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++
++	if (vp_dev && vp_dev->dmb_pool && vaddr)
++		gen_pool_free(vp_dev->dmb_pool, (ulong)vaddr, size);
++}
++
++static dma_addr_t vp_dmb_dma_map_page(struct device *dev, struct page *page,
++				       unsigned long offset, size_t size,
++				       enum dma_data_direction dir,
++				       unsigned long attrs)
++{
++	struct pci_dev *pci_dev = to_pci_dev(dev);
++	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++	dma_addr_t shmem_handle;
++	void *shmem_vaddr;
++	struct vp_dmb_mapping *mapping;
++
++	shmem_vaddr = vp_dmb_dma_alloc(dev, size, &shmem_handle, GFP_ATOMIC, 0);
++	if (!shmem_vaddr)
++		return DMA_MAPPING_ERROR;
++
++	mapping = kmalloc(sizeof(*mapping), GFP_ATOMIC);
++	if (!mapping) {
++		vp_dmb_dma_free(dev, size, shmem_vaddr, shmem_handle, 0);
++		return DMA_MAPPING_ERROR;
++	}
++
++	mapping->handle = shmem_handle;
++	mapping->va = page_address(page) + offset;
++	mapping->size = size;
++
++	if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC) &&
++	    (dir == DMA_TO_DEVICE || dir == DMA_BIDIRECTIONAL))
++		memcpy(shmem_vaddr, mapping->va, size);
++
++	spin_lock(&vp_dev->dmb_lock);
++	list_add(&mapping->list, &vp_dev->dmb_mappings);
++	spin_unlock(&vp_dev->dmb_lock);
++
++	return shmem_handle;
++}
++
++static void vp_dmb_dma_unmap_page(struct device *dev, dma_addr_t map_handle,
++				   size_t size, enum dma_data_direction dir,
++				   unsigned long attrs)
++{
++	struct pci_dev *pci_dev = to_pci_dev(dev);
++	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++	void *shmem_vaddr = vp_dev->dmb_mem + map_handle;
++	struct vp_dmb_mapping *mapping, *tmp;
++	bool found = false;
++
++	spin_lock(&vp_dev->dmb_lock);
++	list_for_each_entry_safe(mapping, tmp, &vp_dev->dmb_mappings, list) {
++		if (mapping->handle == map_handle) {
++			list_del(&mapping->list);
++			found = true;
++			break;
++		}
++	}
++	spin_unlock(&vp_dev->dmb_lock);
++
++	if (!found) {
++		dev_warn(dev, "DMB unmap without map for handle %llx\n",
++			 (unsigned long long)map_handle);
++		return;
++	}
++
++	if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC) &&
++	    (dir == DMA_FROM_DEVICE || dir == DMA_BIDIRECTIONAL))
++		memcpy(mapping->va, shmem_vaddr, size);
++
++	kfree(mapping);
++	vp_dmb_dma_free(dev, size, shmem_vaddr, map_handle, 0);
++}
++
++static const struct dma_map_ops vp_dmb_dma_ops = {
++	.alloc = vp_dmb_dma_alloc,
++	.free = vp_dmb_dma_free,
++	.map_page = vp_dmb_dma_map_page,
++	.unmap_page = vp_dmb_dma_unmap_page,
++};
++
+ /* virtio config->finalize_features() implementation */
+ static int vp_finalize_features(struct virtio_device *vdev)
+ {
+@@ -179,6 +298,45 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/* Initialize Device Memory Buffer if advertised by host */
++	if (__virtio_test_bit(vdev, VIRTIO_F_DMB)) {
++		struct virtio_shm_region region;
++
++		if (!virtio_get_shm_region(vdev, &region, VIRTIO_SHMEM_ID_DMB)) {
++			dev_warn(&vdev->dev, "Failed to find DMB region\n");
++			return -EINVAL;
++		}
++
++		vp_dev->dmb_pool = devm_gen_pool_create(&vdev->dev,
++					ilog2(SMP_CACHE_BYTES), -1, "virtio-dmb");
++		vp_dev->dmb_mem = devm_memremap(&vdev->dev, region.addr,
++					region.len, MEMREMAP_WB | MEMREMAP_DEC);
++		INIT_LIST_HEAD(&vp_dev->dmb_mappings);
++		spin_lock_init(&vp_dev->dmb_lock);
++
++		if (vp_dev->dmb_pool) {
++			int ret = gen_pool_add_virt(vp_dev->dmb_pool,
++						(ulong)vp_dev->dmb_mem,
++						region.addr, region.len, -1);
++			if (ret != 0) {
++				dev_warn(&vdev->dev,
++					 "Failed to init DMB region\n");
++				return -EINVAL;
++			}
++
++			/* Reserve first cache line to avoid offset 0 allocs */
++			gen_pool_alloc(vp_dev->dmb_pool, SMP_CACHE_BYTES);
++
++			/* Override DMA ops for this PCI device */
++			set_dma_ops(&vp_dev->pci_dev->dev, &vp_dmb_dma_ops);
++
++			dev_info(&vdev->dev,
++				 "Enabled %lld bytes Virtio DMB region for %s\n",
++				 (long long)region.len,
++				 dev_name(&vp_dev->pci_dev->dev));
++		}
++	}
++
+ 	vp_iowrite32(0, &vp_dev->common->guest_feature_select);
+ 	vp_iowrite32((u32)vdev->features, &vp_dev->common->guest_feature);
+ 	vp_iowrite32(1, &vp_dev->common->guest_feature_select);
+--- a/include/uapi/linux/virtio_config.h
++++ b/include/uapi/linux/virtio_config.h
+@@ -52,7 +52,7 @@
+  * rest are per-device feature bits.
+  */
+ #define VIRTIO_TRANSPORT_F_START	28
+-#define VIRTIO_TRANSPORT_F_END		38
++#define VIRTIO_TRANSPORT_F_END		43
+ 
+ #ifndef VIRTIO_CONFIG_NO_LEGACY
+ /* Do we get callbacks when the ring is completely used, even if we've
+@@ -92,4 +92,14 @@
+  * Does the device support Single Root I/O Virtualization?
+  */
+ #define VIRTIO_F_SR_IOV			37
++
++/*
++ * When Device Memory Buffer (DMB) is active, all virtio memory addresses are
++ * offsets into a shared memory region that belongs to the device.
++ */
++#define VIRTIO_F_DMB			42
++
++/* Device Memory Buffer (DMB) shared memory region */
++#define VIRTIO_SHMEM_ID_DMB		2
++
+ #endif /* _UAPI_LINUX_VIRTIO_CONFIG_H */
+
+-- 
+2.40.1

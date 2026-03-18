@@ -416,6 +416,7 @@ fn test_preboot_load_snap_disallowed_after_boot_resources() {
         file_engine_type: None,
 
         socket: None,
+        dmb_size: None,
     };
 
     let req = VmmAction::InsertBlockDevice(config);
@@ -427,6 +428,7 @@ fn test_preboot_load_snap_disallowed_after_boot_resources() {
         guest_mac: None,
         rx_rate_limiter: None,
         tx_rate_limiter: None,
+        dmb_size: None,
     });
     verify_load_snap_disallowed_after_boot_resources(req, "InsertNetworkDevice");
 
@@ -437,6 +439,7 @@ fn test_preboot_load_snap_disallowed_after_boot_resources() {
         vsock_id: Some(String::new()),
         guest_cid: 0,
         uds_path: String::new(),
+        dmb_size: None,
     });
     verify_load_snap_disallowed_after_boot_resources(req, "SetVsockDevice");
 

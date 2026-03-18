@@ -902,6 +902,7 @@ class Microvm:
         partuuid=None,
         cache_type=None,
         io_engine=None,
+        dmb_size=None,
     ):
         """Add a block device."""
 
@@ -914,6 +915,7 @@ class Microvm:
             partuuid=partuuid,
             cache_type=cache_type,
             io_engine=io_engine,
+            dmb_size=dmb_size,
         )
         self.disks[drive_id] = path_on_host
 

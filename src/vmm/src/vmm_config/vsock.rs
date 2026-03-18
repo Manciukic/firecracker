@@ -32,6 +32,9 @@ pub struct VsockDeviceConfig {
     pub guest_cid: u32,
     /// Path to local unix socket.
     pub uds_path: String,
+    /// Device Memory Buffer (DMB) size in bytes.
+    #[serde(default)]
+    pub dmb_size: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -47,6 +50,7 @@ impl From<&VsockAndUnixPath> for VsockDeviceConfig {
             vsock_id: None,
             guest_cid: u32::try_from(vsock_lock.cid()).unwrap(),
             uds_path: vsock.uds_path.clone(),
+            dmb_size: None,
         }
     }
 }
@@ -57,6 +61,7 @@ impl From<&Vsock<VsockUnixBackend>> for VsockDeviceConfig {
             vsock_id: None, // deprecated
             guest_cid: u32::try_from(vsock.cid()).unwrap(),
             uds_path: vsock.backend().host_sock_path().to_owned(),
+            dmb_size: None,
         }
     }
 }
@@ -65,12 +70,21 @@ impl From<&Vsock<VsockUnixBackend>> for VsockDeviceConfig {
 #[derive(Debug, Default)]
 pub struct VsockBuilder {
     inner: Option<VsockAndUnixPath>,
+    dmb_size: u64,
 }
 
 impl VsockBuilder {
     /// Creates an empty Vsock with Unix backend Store.
     pub fn new() -> Self {
-        Self { inner: None }
+        Self {
+            inner: None,
+            dmb_size: 0,
+        }
+    }
+
+    /// Returns the DMB size for the vsock device.
+    pub fn get_dmb_size(&self) -> u64 {
+        self.dmb_size
     }
 
     /// Inserts an existing vsock device.
@@ -93,6 +107,7 @@ impl VsockBuilder {
         if let Some(existing) = self.inner.take() {
             std::fs::remove_file(existing.uds_path).map_err(VsockUnixBackendError::UnixBind)?;
         }
+        self.dmb_size = cfg.dmb_size.unwrap_or(0);
         self.inner = Some(VsockAndUnixPath {
             uds_path: cfg.uds_path.clone(),
             vsock: Arc::new(Mutex::new(Self::create_unixsock_vsock(cfg)?)),
@@ -133,6 +148,7 @@ pub(crate) mod tests {
             vsock_id: None,
             guest_cid: 3,
             uds_path: tmp_sock_file.as_path().to_str().unwrap().to_string(),
+            dmb_size: None,
         }
     }
 

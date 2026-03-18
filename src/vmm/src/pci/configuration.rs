@@ -233,20 +233,17 @@ impl PciConfiguration {
     ///
     /// Configures the specified BAR to report this region and size to the guest kernel.
     /// Enforces a few constraints (i.e, region size must be power of two, register not already
-    /// used).
+    /// used). Supports 64-bit BARs at even indices (0, 2, 4).
     pub fn add_pci_bar(&mut self, bar_idx: usize, addr: u64, size: u64) {
         let reg_idx = BAR0_REG + bar_idx;
 
-        // These are a few constraints that are imposed due to the fact
-        // that only VirtIO devices are actually allocating a BAR. Moreover, this is
-        // a single 64-bit BAR. Not conforming to these requirements is an internal
-        // Firecracker bug.
-
-        // We are only using BAR 0
-        assert_eq!(bar_idx, 0);
+        // 64-bit BARs use two consecutive registers, so bar_idx must be even
+        // and leave room for the upper register.
+        assert!(bar_idx % 2 == 0);
+        assert!(bar_idx + 1 < NUM_BAR_REGS);
         // We shouldn't be trying to use the same BAR twice
-        assert!(!self.bars[0].used);
-        assert!(!self.bars[1].used);
+        assert!(!self.bars[bar_idx].used);
+        assert!(!self.bars[bar_idx + 1].used);
         // We can't have a size of 0
         assert_ne!(size, 0);
         // BAR size needs to be a power of two
@@ -409,8 +406,8 @@ impl PciConfiguration {
 
         // We are always using 64bit BARs, so two BAR registers. We don't do anything until
         // the upper BAR is modified, otherwise we would be moving the BAR to a wrong
-        // location in memory.
-        if bar_idx == 0 {
+        // location in memory. Even-indexed BARs are the lower register of a 64-bit pair.
+        if bar_idx % 2 == 0 {
             return None;
         }
 
@@ -727,10 +724,9 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn test_lower_bar_free_upper_used() {
+    fn test_odd_bar_index() {
         let mut pci_config = default_pci_config();
         pci_config.add_pci_bar(1, 0x1000, 0x1000);
-        pci_config.add_pci_bar(0, 0x1000, 0x1000);
     }
 
     #[test]
@@ -742,11 +738,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_upper_bar_used() {
+    fn test_multiple_bars() {
         let mut pci_config = default_pci_config();
-        pci_config.add_pci_bar(0, 0x1000, 0x1000);
-        pci_config.add_pci_bar(1, 0x1000, 0x1000);
+        pci_config.add_pci_bar(0, 0x1_0000_0000, 0x1000);
+        pci_config.add_pci_bar(2, 0x2_0000_0000, 0x2000);
+
+        assert_eq!(pci_config.get_bar_addr(0), 0x1_0000_0000);
+        assert_eq!(pci_config.get_bar_addr(2), 0x2_0000_0000);
+        assert!(pci_config.bars[0].used);
+        assert!(pci_config.bars[1].used);
+        assert!(pci_config.bars[2].used);
+        assert!(pci_config.bars[3].used);
     }
 
     #[test]

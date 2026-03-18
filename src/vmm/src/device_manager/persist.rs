@@ -660,6 +660,7 @@ mod tests {
                 guest_mac: None,
                 rx_rate_limiter: None,
                 tx_rate_limiter: None,
+                dmb_size: None,
             };
             insert_net_device_with_mmds(
                 &mut vmm,
@@ -674,6 +675,7 @@ mod tests {
                 vsock_id: Some(vsock_dev_id.to_string()),
                 guest_cid: 3,
                 uds_path: tmp_sock_file.as_path().to_str().unwrap().to_string(),
+                dmb_size: None,
             };
             insert_vsock_device(&mut vmm, &mut cmdline, &mut event_manager, vsock_config);
             // Add an entropy device.

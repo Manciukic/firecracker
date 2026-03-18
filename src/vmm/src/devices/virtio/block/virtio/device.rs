@@ -235,6 +235,7 @@ impl From<VirtioBlockConfig> for BlockDeviceConfig {
             file_engine_type: Some(value.file_engine_type),
 
             socket: None,
+            dmb_size: None,
         }
     }
 }
@@ -728,6 +729,7 @@ mod tests {
             file_engine_type: Default::default(),
 
             socket: None,
+            dmb_size: None,
         };
         VirtioBlockConfig::try_from(&block_config).unwrap();
 
@@ -743,6 +745,7 @@ mod tests {
             file_engine_type: Default::default(),
 
             socket: Some("sock".to_string()),
+            dmb_size: None,
         };
         VirtioBlockConfig::try_from(&block_config).unwrap_err();
 
@@ -758,6 +761,7 @@ mod tests {
             file_engine_type: Default::default(),
 
             socket: Some("sock".to_string()),
+            dmb_size: None,
         };
         VirtioBlockConfig::try_from(&block_config).unwrap_err();
     }

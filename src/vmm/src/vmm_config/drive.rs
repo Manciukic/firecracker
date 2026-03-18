@@ -1,7 +1,7 @@
 // Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::{Arc, Mutex};
 
@@ -65,6 +65,11 @@ pub struct BlockDeviceConfig {
     // VhostUserBlock specific fields
     /// Path to the vhost-user socket.
     pub socket: Option<String>,
+
+    /// Device Memory Buffer (DMB) size in bytes. When set, enables DMB for this device,
+    /// providing a dedicated shared memory region for DMA.
+    #[serde(default)]
+    pub dmb_size: Option<u64>,
 }
 
 /// Only provided fields will be updated. I.e. if any optional fields
@@ -91,6 +96,8 @@ pub struct BlockBuilder {
     // specified in order to avoid bugs in case of switching from partuuid boot
     // scenarios to /dev/vda boot type.
     pub devices: VecDeque<Arc<Mutex<Block>>>,
+    /// DMB sizes per device ID (only for devices with DMB enabled).
+    dmb_sizes: HashMap<String, u64>,
 }
 
 impl BlockBuilder {
@@ -98,7 +105,13 @@ impl BlockBuilder {
     pub fn new() -> Self {
         Self {
             devices: Default::default(),
+            dmb_sizes: HashMap::new(),
         }
+    }
+
+    /// Returns the DMB size for a device, or 0 if DMB is not enabled.
+    pub fn dmb_size(&self, id: &str) -> u64 {
+        self.dmb_sizes.get(id).copied().unwrap_or(0)
     }
 
     /// Specifies whether there is a root block device already present in the list.
@@ -138,6 +151,7 @@ impl BlockBuilder {
         let position = self.get_index_of_drive_id(&config.drive_id);
         let has_root_device = self.has_root_device();
         let configured_as_root = config.is_root_device;
+        let dmb_size = config.dmb_size;
 
         if configured_as_root && has_pmem_root {
             return Err(DriveError::AddingSecondRootDevice);
@@ -152,6 +166,8 @@ impl BlockBuilder {
         let block_dev = Arc::new(Mutex::new(
             Block::new(config).map_err(DriveError::CreateBlockDevice)?,
         ));
+
+        let dev_id = block_dev.lock().expect("Poisoned lock").id().to_string();
 
         // If the id of the drive already exists in the list, the operation is update/overwrite.
         match position {
@@ -174,6 +190,14 @@ impl BlockBuilder {
                 }
             }
         }
+
+        // Track DMB size for this device.
+        if let Some(size) = dmb_size {
+            self.dmb_sizes.insert(dev_id, size);
+        } else {
+            self.dmb_sizes.remove(&dev_id);
+        }
+
         Ok(())
     }
 
@@ -215,6 +239,7 @@ mod tests {
                 file_engine_type: self.file_engine_type,
 
                 socket: self.socket.clone(),
+                dmb_size: self.dmb_size,
             }
         }
     }
@@ -242,6 +267,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let mut block_devs = BlockBuilder::new();
@@ -276,6 +302,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let mut block_devs = BlockBuilder::new();
@@ -308,6 +335,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let mut block_devs = BlockBuilder::new();
@@ -337,6 +365,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let dummy_file_2 = TempFile::new().unwrap();
@@ -353,6 +382,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let mut block_devs = BlockBuilder::new();
@@ -380,6 +410,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let dummy_file_2 = TempFile::new().unwrap();
@@ -396,6 +427,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let dummy_file_3 = TempFile::new().unwrap();
@@ -412,6 +444,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let mut block_devs = BlockBuilder::new();
@@ -453,6 +486,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let dummy_file_2 = TempFile::new().unwrap();
@@ -469,6 +503,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let dummy_file_3 = TempFile::new().unwrap();
@@ -485,6 +520,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let mut block_devs = BlockBuilder::new();
@@ -527,6 +563,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let dummy_file_2 = TempFile::new().unwrap();
@@ -543,6 +580,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let mut block_devs = BlockBuilder::new();
@@ -615,6 +653,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
         // Switch roots and add a PARTUUID for the new one.
         let mut root_block_device_old = root_block_device;
@@ -631,6 +670,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         block_devs.insert(root_block_device_old, false).unwrap();
@@ -657,6 +697,7 @@ mod tests {
             file_engine_type: Some(FileEngineType::Sync),
 
             socket: None,
+            dmb_size: None,
         };
 
         let mut block_devs = BlockBuilder::new();
@@ -687,6 +728,7 @@ mod tests {
             file_engine_type: None,
 
             socket: None,
+            dmb_size: None,
         };
 
         let block = Block::new(config).unwrap();

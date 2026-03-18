@@ -16,6 +16,9 @@ use crate::devices::virtio::rng::{Entropy, EntropyError};
 pub struct EntropyDeviceConfig {
     /// Configuration for RateLimiter of Entropy device
     pub rate_limiter: Option<RateLimiterConfig>,
+    /// Device Memory Buffer (DMB) size in bytes.
+    #[serde(default)]
+    pub dmb_size: Option<u64>,
 }
 
 impl From<&Entropy> for EntropyDeviceConfig {
@@ -23,6 +26,7 @@ impl From<&Entropy> for EntropyDeviceConfig {
         let rate_limiter: RateLimiterConfig = dev.rate_limiter().into();
         EntropyDeviceConfig {
             rate_limiter: rate_limiter.into_option(),
+            dmb_size: None,
         }
     }
 }
@@ -39,12 +43,23 @@ pub enum EntropyDeviceError {
 
 /// A builder type used to construct an Entropy device
 #[derive(Debug, Default)]
-pub struct EntropyDeviceBuilder(Option<Arc<Mutex<Entropy>>>);
+pub struct EntropyDeviceBuilder {
+    device: Option<Arc<Mutex<Entropy>>>,
+    dmb_size: u64,
+}
 
 impl EntropyDeviceBuilder {
     /// Create a new instance for the builder
     pub fn new() -> Self {
-        Self(None)
+        Self {
+            device: None,
+            dmb_size: 0,
+        }
+    }
+
+    /// Returns the DMB size for the entropy device.
+    pub fn get_dmb_size(&self) -> u64 {
+        self.dmb_size
     }
 
     /// Build an entropy device and return a (counted) reference to it protected by a mutex
@@ -56,8 +71,9 @@ impl EntropyDeviceBuilder {
             .rate_limiter
             .map(RateLimiterConfig::try_into)
             .transpose()?;
+        self.dmb_size = config.dmb_size.unwrap_or(0);
         let dev = Arc::new(Mutex::new(Entropy::new(rate_limiter.unwrap_or_default())?));
-        self.0 = Some(dev.clone());
+        self.device = Some(dev.clone());
 
         Ok(dev)
     }
@@ -70,19 +86,19 @@ impl EntropyDeviceBuilder {
 
     /// Get a reference to the entropy device, if present
     pub fn get(&self) -> Option<&Arc<Mutex<Entropy>>> {
-        self.0.as_ref()
+        self.device.as_ref()
     }
 
     /// Get the configuration of the entropy device (if any)
     pub fn config(&self) -> Option<EntropyDeviceConfig> {
-        self.0
+        self.device
             .as_ref()
             .map(|dev| EntropyDeviceConfig::from(dev.lock().unwrap().deref()))
     }
 
     /// Set the entropy device from an already created object
     pub fn set_device(&mut self, device: Arc<Mutex<Entropy>>) {
-        self.0 = Some(device);
+        self.device = Some(device);
     }
 }
 
@@ -106,8 +122,8 @@ mod tests {
     fn test_set_device() {
         let mut builder = EntropyDeviceBuilder::new();
         let device = Entropy::new(RateLimiter::default()).unwrap();
-        assert!(builder.0.is_none());
+        assert!(builder.device.is_none());
         builder.set_device(Arc::new(Mutex::new(device)));
-        assert!(builder.0.is_some());
+        assert!(builder.device.is_some());
     }
 }
