@@ -23,7 +23,7 @@ use pci::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use vm_allocator::{AddressAllocator, AllocPolicy, RangeInclusive};
-use vm_memory::{Address, ByteValued, GuestAddress, Le32};
+use vm_memory::{Address, Bytes, ByteValued, GuestAddress, Le32};
 use vmm_sys_util::errno;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -288,6 +288,8 @@ pub struct VirtioPciDeviceState {
     pub dmb_size: u64,
     #[serde(default)]
     pub shm_bar_address: u64,
+    #[serde(default)]
+    pub dmb_contents: Option<Vec<u8>>,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -559,7 +561,12 @@ impl VirtioPciDevice {
         };
 
         let effective_memory = if dmb_size > 0 {
-            Self::create_dmb_memory(dmb_size)
+            let mem = Self::create_dmb_memory(dmb_size);
+            if let Some(ref contents) = state.dmb_contents {
+                mem.write(contents, GuestAddress(0))
+                    .expect("Failed to restore DMB memory from snapshot");
+            }
+            mem
         } else {
             vm.guest_memory().clone()
         };
@@ -772,6 +779,16 @@ impl VirtioPciDevice {
     }
 
     pub fn state(&self) -> VirtioPciDeviceState {
+        let dmb_contents = if self.dmb_size > 0 {
+            let mut buf = vec![0u8; self.dmb_size as usize];
+            self.memory
+                .read(&mut buf, GuestAddress(0))
+                .expect("Failed to read DMB memory for snapshot");
+            Some(buf)
+        } else {
+            None
+        };
+
         VirtioPciDeviceState {
             pci_device_bdf: self.pci_device_bdf,
             device_activated: self.device_activated.load(Ordering::Acquire),
@@ -790,6 +807,7 @@ impl VirtioPciDevice {
             bar_address: self.bar_address,
             dmb_size: self.dmb_size,
             shm_bar_address: self.shm_bar_address,
+            dmb_contents,
         }
     }
 }
