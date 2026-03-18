@@ -193,7 +193,7 @@ fn test_cpu_pool_dedup() {
 // ---- Hardware-dependent tests (require NE-capable instance) ----
 
 /// This test requires Nitro Enclaves hardware and a configured CPU pool.
-/// Run with: `cargo test --features nitro-enclave --test enclave_tests -- --ignored`
+/// Run with: `ARTIFACT_DIR=<path> cargo test -p vmm --test enclave_tests -- --ignored`
 #[test]
 #[ignore]
 fn test_build_and_boot_enclave() {
@@ -203,14 +203,39 @@ fn test_build_and_boot_enclave() {
     use vmm::vmm_config::instance_info::{InstanceInfo, VmState};
     use vmm::vmm_config::machine_config::MachineConfigUpdate;
 
-    // This test expects kernel and initrd at these paths
-    let kernel_path = "/tmp/vmlinux";
-    let initrd_path = "/tmp/initrd.img";
+    let artifact_dir = std::env::var("ARTIFACT_DIR").unwrap_or_else(|_| {
+        let fc_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        let current = fc_root.join("build/current_artifacts");
+        let content = fs::read_to_string(&current)
+            .unwrap_or_else(|e| panic!("Cannot read {}: {e}", current.display()));
+        fc_root
+            .join(content.trim())
+            .to_string_lossy()
+            .into_owned()
+    });
+    let artifact_path = std::path::Path::new(&artifact_dir);
 
-    if !std::path::Path::new(kernel_path).exists() || !std::path::Path::new(initrd_path).exists() {
-        eprintln!("Skipping test: kernel or initrd not found");
-        return;
-    }
+    // Find a bzImage-* kernel in the artifact directory
+    let kernel_path = fs::read_dir(artifact_path)
+        .expect("Cannot read artifact directory")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("bzImage-"))
+        })
+        .unwrap_or_else(|| panic!("No bzImage-* found in {artifact_dir}"));
+
+    let initrd_path = artifact_path.join("initramfs.cpio");
+    assert!(
+        initrd_path.exists(),
+        "initramfs.cpio not found in {artifact_dir}"
+    );
 
     let instance_info = InstanceInfo {
         id: "test-enclave".to_string(),
@@ -220,8 +245,8 @@ fn test_build_and_boot_enclave() {
     };
 
     let boot_source_config = BootSourceConfig {
-        kernel_image_path: kernel_path.to_string(),
-        initrd_path: Some(initrd_path.to_string()),
+        kernel_image_path: kernel_path.to_string_lossy().into_owned(),
+        initrd_path: Some(initrd_path.to_string_lossy().into_owned()),
         boot_args: Some("console=ttyS0 reboot=k panic=1".to_string()),
     };
 
@@ -233,6 +258,7 @@ fn test_build_and_boot_enclave() {
     let machine_update = MachineConfigUpdate {
         vcpu_count: Some(2),
         mem_size_mib: Some(256),
+        huge_pages: Some(vmm::vmm_config::machine_config::HugePageConfig::Hugetlbfs2M),
         ..Default::default()
     };
     vm_resources

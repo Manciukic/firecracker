@@ -17,7 +17,18 @@ source "$GIT_ROOT_DIR/tools/functions"
 # Make sure we have all the needed tools
 function install_dependencies {
     apt update
-    apt install -y bc flex bison gcc make libelf-dev libssl-dev squashfs-tools busybox-static tree cpio curl patch docker.io
+    apt install -y bc flex bison gcc make libelf-dev libssl-dev squashfs-tools busybox-static tree cpio curl patch docker.io rpm2cpio
+
+    # Install nitro-cli for building Nitro Enclave EIF images (x86_64 only)
+    if [ $ARCH = "x86_64" ]; then
+        local NITRO_CLI_VER="1.4.4-0.amzn2023"
+        local AL2023_BLOBSTORE="https://al2023-repos-us-east-1-de612dc2.s3.dualstack.us-east-1.amazonaws.com/blobstore"
+        curl -sLO "${AL2023_BLOBSTORE}/5f38b5ae6f4e0f1d528a49a9710f4432941cf6c1f92a7a5dc0c05c667da06c0c/aws-nitro-enclaves-cli-${NITRO_CLI_VER}.x86_64.rpm"
+        curl -sLO "${AL2023_BLOBSTORE}/917cdace45089db1a64eea5ae4b64b6a6133d8e953c044854b70f4bd7cd4ef8d/aws-nitro-enclaves-cli-devel-${NITRO_CLI_VER}.x86_64.rpm"
+        rpm2cpio aws-nitro-enclaves-cli-${NITRO_CLI_VER}.x86_64.rpm | (cd / && cpio -idmv ./usr/bin/nitro-cli)
+        rpm2cpio aws-nitro-enclaves-cli-devel-${NITRO_CLI_VER}.x86_64.rpm | (cd / && cpio -idmv ./usr/share/nitro_enclaves/)
+        rm -f aws-nitro-enclaves-cli*.rpm
+    fi
 
     # Install Go
     version=$(curl -s https://go.dev/VERSION?m=text | head -n 1)
@@ -273,6 +284,19 @@ function build_al_kernels {
     fi
 }
 
+function build_hello_eif {
+    if [ $ARCH != "x86_64" ]; then
+        say "Skipping hello.eif build (x86_64 only)"
+        return
+    fi
+    say "Building hello.eif"
+    prepare_docker
+    docker build -t hello-enclave:latest /usr/share/nitro_enclaves/examples/hello/
+    nitro-cli build-enclave \
+        --docker-uri hello-enclave:latest \
+        --output-file $OUTPUT_DIR/hello.eif
+}
+
 function print_help {
     cat <<EOF
 Firecracker CI artifacts build script
@@ -297,6 +321,10 @@ Available commands:
         version: Optionally choose a kernel version to build. Supported
                  versions are: 5.10, 5.10-no-acpi or 6.1.
 
+    eif
+        Builds the hello.eif Nitro Enclave image using nitro-cli.
+        Requires x86_64 and Docker.
+
     help
         Displays the help message and exits.
 EOF
@@ -307,7 +335,7 @@ function main {
         local MODE="all"
     else
         case $1 in
-            all|rootfs|kernels)
+            all|rootfs|kernels|eif)
                 local MODE=$1
                 shift
                 ;;
@@ -335,6 +363,10 @@ function main {
     if [[ "$MODE" =~ (all|kernels) ]]; then
         say "Building CI kernels"
         build_al_kernels "$@"
+    fi
+
+    if [[ "$MODE" =~ (all|eif) ]]; then
+        build_hello_eif
     fi
 
     tree -h $OUTPUT_DIR

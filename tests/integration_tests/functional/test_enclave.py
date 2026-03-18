@@ -3,9 +3,7 @@
 """Tests for Nitro Enclaves support in Firecracker."""
 
 import os
-import subprocess
 import time
-from pathlib import Path
 
 import pytest
 
@@ -42,42 +40,6 @@ def _get_ne_cpus():
 def _has_ne_cpus():
     """Check if NE CPU pool is configured."""
     return len(_get_ne_cpus()) > 0
-
-
-def _build_hello_eif():
-    """Build the hello.eif using nitro-cli if it doesn't exist."""
-    if EIF_PATH.exists():
-        return True
-    try:
-        # Ensure hello Docker image exists
-        subprocess.run(
-            [
-                "docker",
-                "build",
-                "-t",
-                "hello:latest",
-                "/usr/share/nitro_enclaves/examples/hello/",
-            ],
-            check=True,
-            capture_output=True,
-            timeout=60,
-        )
-        subprocess.run(
-            [
-                "nitro-cli",
-                "build-enclave",
-                "--docker-uri",
-                "hello:latest",
-                "--output-file",
-                str(EIF_PATH),
-            ],
-            check=True,
-            capture_output=True,
-            timeout=120,
-        )
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
 
 
 requires_ne = pytest.mark.skipif(
@@ -127,9 +89,6 @@ def _configure_and_start_enclave(vm, eif_path, debug_mode=True):
 @requires_ne
 def test_enclave_boot_debug_mode(microvm_factory):
     """Start Firecracker with a pre-built EIF in debug mode via API."""
-    if not _build_hello_eif():
-        pytest.skip("Could not build hello.eif (nitro-cli not available)")
-
     vm = _spawn_enclave_vm(microvm_factory, EIF_PATH)
     _configure_and_start_enclave(vm, EIF_PATH, debug_mode=True)
 
@@ -146,9 +105,6 @@ def test_enclave_boot_debug_mode(microvm_factory):
 @requires_ne
 def test_enclave_state_booting_to_running(microvm_factory):
     """Verify enclave transitions from Booting to Running after heartbeat."""
-    if not _build_hello_eif():
-        pytest.skip("Could not build hello.eif (nitro-cli not available)")
-
     vm = _spawn_enclave_vm(microvm_factory, EIF_PATH)
     _configure_and_start_enclave(vm, EIF_PATH, debug_mode=True)
 
@@ -179,9 +135,6 @@ def test_enclave_state_booting_to_running(microvm_factory):
 @requires_ne
 def test_enclave_console_output(microvm_factory):
     """Verify that the enclave vsock console output appears in the serial log."""
-    if not _build_hello_eif():
-        pytest.skip("Could not build hello.eif (nitro-cli not available)")
-
     vm = _spawn_enclave_vm(microvm_factory, EIF_PATH)
     _configure_and_start_enclave(vm, EIF_PATH, debug_mode=True)
 
@@ -213,9 +166,6 @@ def test_enclave_console_output(microvm_factory):
 @requires_ne
 def test_enclave_boot_production_mode(microvm_factory):
     """Start Firecracker with a pre-built EIF in production mode via API."""
-    if not _build_hello_eif():
-        pytest.skip("Could not build hello.eif (nitro-cli not available)")
-
     vm = _spawn_enclave_vm(microvm_factory, EIF_PATH)
     _configure_and_start_enclave(vm, EIF_PATH, debug_mode=False)
 
@@ -251,9 +201,6 @@ def test_enclave_invalid_config_no_boot_source(microvm_factory):
 @requires_ne
 def test_enclave_terminate(microvm_factory):
     """Start enclave and verify clean SIGTERM shutdown."""
-    if not _build_hello_eif():
-        pytest.skip("Could not build hello.eif (nitro-cli not available)")
-
     vm = _spawn_enclave_vm(microvm_factory, EIF_PATH)
     _configure_and_start_enclave(vm, EIF_PATH, debug_mode=True)
 
