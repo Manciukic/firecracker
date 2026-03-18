@@ -620,7 +620,7 @@ fn attach_entropy_device(
         .id()
         .to_string();
 
-    device_manager.attach_virtio_device_with_dmb(
+    device_manager.attach_virtio_device(
         vm,
         id,
         entropy_device.clone(),
@@ -674,6 +674,7 @@ fn attach_virtio_mem_device(
         cmdline,
         event_manager,
         false,
+        0,
     )?;
     Ok(())
 }
@@ -702,7 +703,7 @@ fn attach_block_devices(
         };
         let dmb_size = block_builder.dmb_size(&id);
         // The device mutex mustn't be locked here otherwise it will deadlock.
-        device_manager.attach_virtio_device_with_dmb(
+        device_manager.attach_virtio_device(
             vm,
             id,
             block.clone(),
@@ -726,7 +727,7 @@ fn attach_net_devices(
         let id = net_device.lock().expect("Poisoned lock").id().to_string();
         let dmb_size = net_builder.dmb_size(&id);
         // The device mutex mustn't be locked here otherwise it will deadlock.
-        device_manager.attach_virtio_device_with_dmb(
+        device_manager.attach_virtio_device(
             vm,
             id,
             net_device.clone(),
@@ -768,6 +769,7 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
             cmdline,
             event_manager,
             false,
+            0,
         )?;
     }
     Ok(())
@@ -783,7 +785,7 @@ fn attach_unixsock_vsock_device(
 ) -> Result<(), AttachDeviceError> {
     let id = String::from(unix_vsock.lock().expect("Poisoned lock").id());
     // The device mutex mustn't be locked here otherwise it will deadlock.
-    device_manager.attach_virtio_device_with_dmb(
+    device_manager.attach_virtio_device(
         vm,
         id,
         unix_vsock.clone(),
@@ -803,7 +805,7 @@ fn attach_balloon_device(
 ) -> Result<(), AttachDeviceError> {
     let id = String::from(balloon.lock().expect("Poisoned lock").id());
     // The device mutex mustn't be locked here otherwise it will deadlock.
-    device_manager.attach_virtio_device(vm, id, balloon.clone(), cmdline, event_manager, false)
+    device_manager.attach_virtio_device(vm, id, balloon.clone(), cmdline, event_manager, false, 0)
 }
 
 #[cfg(test)]

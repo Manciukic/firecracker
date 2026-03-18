@@ -230,21 +230,6 @@ impl DeviceManager {
         cmdline: &mut Cmdline,
         event_manager: &mut EventManager,
         is_vhost_user: bool,
-    ) -> Result<(), AttachDeviceError> {
-        self.attach_virtio_device_with_dmb(vm, id, device, cmdline, event_manager, is_vhost_user, 0)
-    }
-
-    /// Attaches a VirtioDevice device with optional DMB (Device Memory Buffer) support.
-    pub(crate) fn attach_virtio_device_with_dmb<
-        T: 'static + VirtioDevice + MutEventSubscriber + Debug,
-    >(
-        &mut self,
-        vm: &Arc<Vm>,
-        id: String,
-        device: Arc<Mutex<T>>,
-        cmdline: &mut Cmdline,
-        event_manager: &mut EventManager,
-        is_vhost_user: bool,
         dmb_size: u64,
     ) -> Result<(), AttachDeviceError> {
         if self.is_pci_enabled() {
