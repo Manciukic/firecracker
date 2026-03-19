@@ -265,6 +265,7 @@ def test_enclave_terminate(microvm_factory):
 
 # --- EIF build from kernel+initrd tests ---
 
+
 def _ne_cmdline():
     """Return NE boot command line, appropriate for the current architecture."""
     base = "reboot=k panic=30 pci=off nomodules console=ttyS0 random.trust_cpu=on"
