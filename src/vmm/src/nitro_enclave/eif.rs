@@ -26,8 +26,19 @@ const EIF_SECTION_CMDLINE: u16 = 2;
 const EIF_SECTION_RAMDISK: u16 = 3;
 const EIF_SECTION_METADATA: u16 = 5;
 
-/// Default flags.
-const EIF_DEFAULT_FLAGS: u16 = 0;
+/// Architecture flags for the EIF header.
+/// x86_64 = 0, aarch64 = 1 (matching aws-nitro-enclaves-image-format).
+const EIF_ARCH_X86_64: u16 = 0;
+const EIF_ARCH_AARCH64: u16 = 1;
+
+/// Returns the EIF architecture flag for the current platform.
+fn eif_arch_flags() -> u16 {
+    if cfg!(target_arch = "aarch64") {
+        EIF_ARCH_AARCH64
+    } else {
+        EIF_ARCH_X86_64
+    }
+}
 
 /// Maximum number of sections in the fixed-size header arrays.
 const MAX_NUM_SECTIONS: usize = 32;
@@ -108,7 +119,7 @@ pub fn build_eif(
     // --- EIF Header (all big-endian) ---
     eif.extend_from_slice(&EIF_MAGIC);
     eif.extend_from_slice(&EIF_HDR_VERSION.to_be_bytes());
-    eif.extend_from_slice(&EIF_DEFAULT_FLAGS.to_be_bytes());
+    eif.extend_from_slice(&eif_arch_flags().to_be_bytes());
     eif.extend_from_slice(&default_mem.to_be_bytes());
     eif.extend_from_slice(&default_cpus.to_be_bytes());
     eif.extend_from_slice(&0u16.to_be_bytes()); // reserved

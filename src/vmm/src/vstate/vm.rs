@@ -173,6 +173,13 @@ impl Vm {
         self.as_kvm_mut().setup_irqchip(vcpu_count)
     }
 
+    #[cfg(target_arch = "aarch64")]
+    /// Gets a reference to the irqchip of the VM.
+    /// Only available for KVM VMs on aarch64.
+    pub fn get_irqchip(&self) -> &crate::arch::aarch64::gic::GICDevice {
+        self.as_kvm().get_irqchip()
+    }
+
     /// Gets a reference to the VmCommon struct.
     pub fn common(&self) -> &VmCommon {
         &self.as_kvm().common

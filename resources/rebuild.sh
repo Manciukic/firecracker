@@ -19,16 +19,24 @@ function install_dependencies {
     apt update
     apt install -y bc flex bison gcc make libelf-dev libssl-dev squashfs-tools busybox-static tree cpio curl patch docker.io rpm2cpio
 
-    # Install nitro-cli for building Nitro Enclave EIF images (x86_64 only)
-    if [ $ARCH = "x86_64" ]; then
-        local NITRO_CLI_VER="1.4.4-0.amzn2023"
-        local AL2023_BLOBSTORE="https://al2023-repos-us-east-1-de612dc2.s3.dualstack.us-east-1.amazonaws.com/blobstore"
-        curl -sLO "${AL2023_BLOBSTORE}/5f38b5ae6f4e0f1d528a49a9710f4432941cf6c1f92a7a5dc0c05c667da06c0c/aws-nitro-enclaves-cli-${NITRO_CLI_VER}.x86_64.rpm"
-        curl -sLO "${AL2023_BLOBSTORE}/917cdace45089db1a64eea5ae4b64b6a6133d8e953c044854b70f4bd7cd4ef8d/aws-nitro-enclaves-cli-devel-${NITRO_CLI_VER}.x86_64.rpm"
-        rpm2cpio aws-nitro-enclaves-cli-${NITRO_CLI_VER}.x86_64.rpm | (cd / && cpio -idmv ./usr/bin/nitro-cli)
-        rpm2cpio aws-nitro-enclaves-cli-devel-${NITRO_CLI_VER}.x86_64.rpm | (cd / && cpio -idmv ./usr/share/nitro_enclaves/)
-        rm -f aws-nitro-enclaves-cli*.rpm
-    fi
+    # Install nitro-cli for building Nitro Enclave EIF images
+    local NITRO_CLI_VER="1.4.4-0.amzn2023"
+    local AL2023_BLOBSTORE="https://al2023-repos-us-east-1-de612dc2.s3.dualstack.us-east-1.amazonaws.com/blobstore"
+    case $ARCH in
+        x86_64)
+            local CLI_HASH="5f38b5ae6f4e0f1d528a49a9710f4432941cf6c1f92a7a5dc0c05c667da06c0c"
+            local DEV_HASH="917cdace45089db1a64eea5ae4b64b6a6133d8e953c044854b70f4bd7cd4ef8d"
+            ;;
+        aarch64)
+            local CLI_HASH="f7b3af4af1f8cdcf9f849aaca32d12a589cdc3700c68651a4fd7fa3946ead5c0"
+            local DEV_HASH="5f7951f634f604cd3d635c210f15c72b4faed1e119feefdc8085fbf994035aac"
+            ;;
+    esac
+    curl -sLO "${AL2023_BLOBSTORE}/${CLI_HASH}/aws-nitro-enclaves-cli-${NITRO_CLI_VER}.${ARCH}.rpm"
+    curl -sLO "${AL2023_BLOBSTORE}/${DEV_HASH}/aws-nitro-enclaves-cli-devel-${NITRO_CLI_VER}.${ARCH}.rpm"
+    rpm2cpio aws-nitro-enclaves-cli-${NITRO_CLI_VER}.${ARCH}.rpm | (cd / && cpio -idmv ./usr/bin/nitro-cli)
+    rpm2cpio aws-nitro-enclaves-cli-devel-${NITRO_CLI_VER}.${ARCH}.rpm | (cd / && cpio -idmv ./usr/share/nitro_enclaves/)
+    rm -f aws-nitro-enclaves-cli*.rpm
 
     # Install Go
     version=$(curl -s https://go.dev/VERSION?m=text | head -n 1)
@@ -111,7 +119,7 @@ exec /bin/sh
 EOF
     chmod +x init
 
-    find . -print0 |cpio --null -ov --format=newc -R 0:0 > $OUTPUT_DIR/initramfs.cpio
+    find . -print0 |cpio --null -o --format=newc -R 0:0 > $OUTPUT_DIR/initramfs.cpio
     popd
     rm -rf $INITRAMFS_BUILD
 }
@@ -188,10 +196,12 @@ function build_al_kernel {
     cp -v $binary_path $OUTPUT_FILE
     cp -v .config $OUTPUT_FILE.config
 
-    # Also build bzImage for x86_64 (needed for Nitro Enclaves EIF building)
+    # Also save a bootable kernel image for Nitro Enclaves EIF building
     if [ "$arch" = "x86_64" ]; then
         make -j $(nproc) bzImage
         cp -v arch/x86/boot/bzImage $OUTPUT_DIR/bzImage-$normalized_version$flavour
+    elif [ "$arch" = "aarch64" ]; then
+        cp -v arch/arm64/boot/Image $OUTPUT_DIR/Image-$normalized_version$flavour
     fi
 
     # Undo any patches previously applied, so that we can build the same kernel with different
@@ -285,10 +295,6 @@ function build_al_kernels {
 }
 
 function build_hello_eif {
-    if [ $ARCH != "x86_64" ]; then
-        say "Skipping hello.eif build (x86_64 only)"
-        return
-    fi
     say "Building hello.eif"
     prepare_docker
     docker build -t hello-enclave:latest /usr/share/nitro_enclaves/examples/hello/
@@ -323,7 +329,7 @@ Available commands:
 
     eif
         Builds the hello.eif Nitro Enclave image using nitro-cli.
-        Requires x86_64 and Docker.
+        Requires Docker.
 
     help
         Displays the help message and exits.

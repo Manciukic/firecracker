@@ -3,6 +3,7 @@
 """Tests for Nitro Enclaves support in Firecracker."""
 
 import os
+import platform
 import time
 
 import pytest
@@ -264,15 +265,30 @@ def test_enclave_terminate(microvm_factory):
 
 # --- EIF build from kernel+initrd tests ---
 
-NE_CMDLINE = (
-    "reboot=k panic=30 pci=off nomodules console=ttyS0 "
-    "i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd random.trust_cpu=on"
-)
+def _ne_cmdline():
+    """Return NE boot command line, appropriate for the current architecture."""
+    base = "reboot=k panic=30 pci=off nomodules console=ttyS0 random.trust_cpu=on"
+    if platform.machine() == "x86_64":
+        base += " i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd"
+    return base
 
 
-def _get_bzimage_path():
-    """Find a bzImage in the artifact directory."""
-    candidates = sorted(ARTIFACT_DIR.glob("bzImage-*"))
+NE_CMDLINE = _ne_cmdline()
+
+
+def _get_kernel_image_path():
+    """Find a bootable kernel image for EIF building in the artifact directory.
+
+    On x86_64 this is bzImage-*, on aarch64 this is Image-*.
+    """
+    arch = platform.machine()
+    if arch == "x86_64":
+        pattern = "bzImage-*"
+    elif arch == "aarch64":
+        pattern = "Image-*"
+    else:
+        return None
+    candidates = sorted(ARTIFACT_DIR.glob(pattern))
     return candidates[0] if candidates else None
 
 
@@ -280,17 +296,17 @@ def _get_bzimage_path():
 def test_enclave_eif_build_from_kernel(microvm_factory):
     """Build EIF from kernel+initrd at boot time and verify enclave starts.
 
-    Uses CI artifacts (bzImage + initramfs.cpio) instead of a pre-built EIF.
+    Uses CI artifacts (bzImage/Image + initramfs.cpio) instead of a pre-built EIF.
     Firecracker detects the kernel is not an EIF and auto-builds one.
     """
-    bzimage = _get_bzimage_path()
-    if not bzimage:
-        pytest.skip("bzImage not found in artifacts")
+    kernel_image = _get_kernel_image_path()
+    if not kernel_image:
+        pytest.skip("Bootable kernel image not found in artifacts")
     initrd = ARTIFACT_DIR / "initramfs.cpio"
     if not initrd.exists():
         pytest.skip("initramfs.cpio not found in artifacts")
 
-    vm = _spawn_enclave_vm(microvm_factory, bzimage)
+    vm = _spawn_enclave_vm(microvm_factory, kernel_image)
 
     ne_cpus = _get_ne_cpus()
     cpu_ids = ne_cpus[:2] if ne_cpus else None
@@ -302,7 +318,7 @@ def test_enclave_eif_build_from_kernel(microvm_factory):
         huge_pages="2M",
     )
     vm.api.boot.put(
-        kernel_image_path=vm.create_jailed_resource(bzimage),
+        kernel_image_path=vm.create_jailed_resource(kernel_image),
         initrd_path=vm.create_jailed_resource(initrd),
         boot_args=NE_CMDLINE,
     )
