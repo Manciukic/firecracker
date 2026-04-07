@@ -61,6 +61,8 @@ and this project adheres to
   (0x4b564d00-0x4b564dff) instead of a small subset. Previously, some KVM MSRs
   such as MSR_KVM_ASYNC_PF_INT and MSR_KVM_ASYNC_PF_ACK were missing from
   snapshots, which could cause issues on restore.
+- [#XXXX](https://github.com/firecracker-microvm/firecracker/pull/XXXX): Dummy
+  changelog entry.
 
 ## [1.15.0]
 
