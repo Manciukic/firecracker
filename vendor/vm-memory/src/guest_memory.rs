@@ -644,6 +644,39 @@ impl<T: GuestMemory + ?Sized> Bytes<GuestAddress> for T {
         Ok(())
     }
 
+    /// Fast-path read_obj that bypasses the iterator chain when the object
+    /// fits within a single region (the common case).
+    #[inline]
+    fn read_obj<U: ByteValued>(&self, addr: GuestAddress) -> Result<U> {
+        if let Some((region, region_addr)) = self.to_region_addr(addr) {
+            if region
+                .checked_offset(region_addr, core::mem::size_of::<U>() - 1)
+                .is_some()
+            {
+                return Bytes::read_obj(region, region_addr).map_err(Into::into);
+            }
+        }
+        // Fallback: object spans region boundary
+        let mut result = U::zeroed();
+        self.read_slice(result.as_mut_slice(), addr).map(|_| result)
+    }
+
+    /// Fast-path write_obj that bypasses the iterator chain when the object
+    /// fits within a single region (the common case).
+    #[inline]
+    fn write_obj<U: ByteValued>(&self, val: U, addr: GuestAddress) -> Result<()> {
+        if let Some((region, region_addr)) = self.to_region_addr(addr) {
+            if region
+                .checked_offset(region_addr, core::mem::size_of::<U>() - 1)
+                .is_some()
+            {
+                return Bytes::write_obj(region, val, region_addr).map_err(Into::into);
+            }
+        }
+        // Fallback: object spans region boundary
+        self.write_slice(val.as_slice(), addr)
+    }
+
     fn read_volatile_from<F>(&self, addr: GuestAddress, src: &mut F, count: usize) -> Result<usize>
     where
         F: ReadVolatile,
