@@ -10,7 +10,7 @@ use std::sync::atomic::{Ordering, fence};
 
 use crate::logger::error;
 use crate::vstate::memory::{
-    Address, ByteValued, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap,
+    Address, ByteValued, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, MemoryRegionCache,
 };
 
 pub const VIRTQ_DESC_F_NEXT: u16 = 0x1;
@@ -113,7 +113,7 @@ pub struct DescriptorChain {
 
 impl DescriptorChain {
     fn checked_new(
-        mem: &GuestMemoryMmap,
+        desc_cache: &MemoryRegionCache,
         desc_table: GuestAddress,
         queue_size: u16,
         index: u16,
@@ -122,12 +122,11 @@ impl DescriptorChain {
             return None;
         }
 
-        let desc_head = desc_table.unchecked_add(
-            (usize::from(index) * std::mem::size_of::<Descriptor>()) as u64,
-        );
-        let desc = match mem.read_obj::<Descriptor>(desc_head) {
+        let desc_offset = usize::from(index) * std::mem::size_of::<Descriptor>();
+        let desc = match desc_cache.read_obj::<Descriptor>(desc_offset) {
             Ok(ret) => ret,
             Err(err) => {
+                let desc_head = desc_table.unchecked_add(desc_offset as u64);
                 error!(
                     "Failed to read virtio descriptor from memory at address {:#x}: {}",
                     desc_head.0, err
@@ -177,9 +176,27 @@ impl DescriptorChain {
     }
 
     /// Gets the next descriptor in this descriptor chain, if there is one.
+    /// Uses a cached region translation for the descriptor table read.
+    pub fn next_descriptor_cached(&self, desc_cache: &MemoryRegionCache) -> Option<Self> {
+        if self.has_next() {
+            DescriptorChain::checked_new(desc_cache, self.desc_table, self.queue_size, self.next)
+                .map(|mut c| {
+                    c.ttl = self.ttl - 1;
+                    c
+                })
+        } else {
+            None
+        }
+    }
+
+    /// Gets the next descriptor in this descriptor chain, if there is one.
+    /// Falls back to full GPA translation (for callers without a cached region).
     pub fn next_descriptor(&self, mem: &GuestMemoryMmap) -> Option<Self> {
         if self.has_next() {
-            DescriptorChain::checked_new(mem, self.desc_table, self.queue_size, self.next).map(
+            let desc_table_size =
+                usize::from(self.queue_size) * std::mem::size_of::<Descriptor>();
+            let cache = MemoryRegionCache::new(mem, self.desc_table, desc_table_size).ok()?;
+            DescriptorChain::checked_new(&cache, self.desc_table, self.queue_size, self.next).map(
                 |mut c| {
                     c.ttl = self.ttl - 1;
                     c
@@ -214,6 +231,11 @@ pub struct Queue {
 
     /// Guest memory, stored during initialization for GPA-based ring access.
     pub(crate) mem: Option<GuestMemoryMmap>,
+
+    /// Cached translations for the three ring areas (set during initialize).
+    pub(crate) desc_cache: Option<MemoryRegionCache>,
+    pub(crate) avail_cache: Option<MemoryRegionCache>,
+    pub(crate) used_cache: Option<MemoryRegionCache>,
 
     pub next_avail: Wrapping<u16>,
     pub next_used: Wrapping<u16>,
@@ -253,6 +275,9 @@ impl Queue {
             avail_ring_address: GuestAddress(0),
             used_ring_address: GuestAddress(0),
             mem: None,
+            desc_cache: None,
+            avail_cache: None,
+            used_cache: None,
             next_avail: Wrapping(0),
             next_used: Wrapping(0),
             uses_notif_suppression: false,
@@ -303,22 +328,20 @@ impl Queue {
         Self::check_alignment(self.avail_ring_address, 2)?;
         Self::check_alignment(self.used_ring_address, 4)?;
 
-        // Validate that all ring areas are within guest memory
-        mem.check_range(self.desc_table_address, self.desc_table_size())
-            .then_some(())
-            .ok_or(QueueError::MemoryError(
-                vm_memory::GuestMemoryError::InvalidGuestAddress(self.desc_table_address),
-            ))?;
-        mem.check_range(self.avail_ring_address, self.avail_ring_size())
-            .then_some(())
-            .ok_or(QueueError::MemoryError(
-                vm_memory::GuestMemoryError::InvalidGuestAddress(self.avail_ring_address),
-            ))?;
-        mem.check_range(self.used_ring_address, self.used_ring_size())
-            .then_some(())
-            .ok_or(QueueError::MemoryError(
-                vm_memory::GuestMemoryError::InvalidGuestAddress(self.used_ring_address),
-            ))?;
+        // Create cached translations for each ring area.
+        // This validates that each range fits within a single memory region.
+        self.desc_cache = Some(
+            MemoryRegionCache::new(mem, self.desc_table_address, self.desc_table_size())
+                .map_err(QueueError::MemoryError)?,
+        );
+        self.avail_cache = Some(
+            MemoryRegionCache::new(mem, self.avail_ring_address, self.avail_ring_size())
+                .map_err(QueueError::MemoryError)?,
+        );
+        self.used_cache = Some(
+            MemoryRegionCache::new(mem, self.used_ring_address, self.used_ring_size())
+                .map_err(QueueError::MemoryError)?,
+        );
 
         self.mem = Some(mem.clone());
 
@@ -334,54 +357,68 @@ impl Queue {
     }
 
     #[inline(always)]
+    fn avail(&self) -> &MemoryRegionCache {
+        self.avail_cache
+            .as_ref()
+            .expect("Queue accessed before initialization")
+    }
+
+    #[inline(always)]
+    fn used(&self) -> &MemoryRegionCache {
+        self.used_cache
+            .as_ref()
+            .expect("Queue accessed before initialization")
+    }
+
+    #[inline(always)]
+    pub fn desc(&self) -> &MemoryRegionCache {
+        self.desc_cache
+            .as_ref()
+            .expect("Queue accessed before initialization")
+    }
+
+    #[inline(always)]
     pub fn avail_ring_idx_get(&self) -> u16 {
-        let addr = self.avail_ring_address.unchecked_add(2);
-        self.mem().read_obj::<u16>(addr).unwrap()
+        self.avail().read_obj::<u16>(2).unwrap()
     }
 
     #[inline(always)]
     fn avail_ring_ring_get(&self, index: usize) -> u16 {
-        let addr = self.avail_ring_address.unchecked_add((4 + 2 * index) as u64);
-        self.mem().read_obj::<u16>(addr).unwrap()
+        self.avail().read_obj::<u16>(4 + 2 * index).unwrap()
     }
 
     #[inline(always)]
     pub fn avail_ring_used_event_get(&self) -> u16 {
-        let addr = self
-            .avail_ring_address
-            .unchecked_add((4 + 2 * usize::from(self.size)) as u64);
-        self.mem().read_obj::<u16>(addr).unwrap()
+        self.avail()
+            .read_obj::<u16>(4 + 2 * usize::from(self.size))
+            .unwrap()
     }
 
     #[inline(always)]
     pub fn used_ring_idx_set(&mut self, val: u16) {
-        let addr = self.used_ring_address.unchecked_add(2);
-        self.mem().write_obj(val, addr).unwrap();
+        self.used().write_obj(val, 2).unwrap();
     }
 
     #[inline(always)]
     fn used_ring_ring_set(&mut self, index: usize, val: UsedElement) {
-        let addr = self
-            .used_ring_address
-            .unchecked_add((4 + std::mem::size_of::<UsedElement>() * index) as u64);
-        self.mem().write_obj(val, addr).unwrap();
+        self.used()
+            .write_obj(val, 4 + std::mem::size_of::<UsedElement>() * index)
+            .unwrap();
     }
 
     #[cfg(any(test, kani))]
     #[inline(always)]
     pub fn used_ring_avail_event_get(&self) -> u16 {
-        let addr = self.used_ring_address.unchecked_add(
-            (4 + std::mem::size_of::<UsedElement>() * usize::from(self.size)) as u64,
-        );
-        self.mem().read_obj::<u16>(addr).unwrap()
+        self.used()
+            .read_obj::<u16>(4 + std::mem::size_of::<UsedElement>() * usize::from(self.size))
+            .unwrap()
     }
 
     #[inline(always)]
     pub fn used_ring_avail_event_set(&mut self, val: u16) {
-        let addr = self.used_ring_address.unchecked_add(
-            (4 + std::mem::size_of::<UsedElement>() * usize::from(self.size)) as u64,
-        );
-        self.mem().write_obj(val, addr).unwrap();
+        self.used()
+            .write_obj(val, 4 + std::mem::size_of::<UsedElement>() * usize::from(self.size))
+            .unwrap();
     }
 
     /// Returns the number of yet-to-be-popped descriptor chains in the avail ring.
@@ -470,7 +507,7 @@ impl Queue {
         let idx = self.next_avail.0 % self.size;
         let desc_index = self.avail_ring_ring_get(usize::from(idx));
 
-        DescriptorChain::checked_new(self.mem(), self.desc_table_address, self.size, desc_index)
+        DescriptorChain::checked_new(self.desc(), self.desc_table_address, self.size, desc_index)
             .inspect(|_| {
                 self.next_avail += Wrapping(1);
             })
@@ -602,6 +639,9 @@ impl Queue {
         self.avail_ring_address = GuestAddress(0);
         self.used_ring_address = GuestAddress(0);
         self.mem = None;
+        self.desc_cache = None;
+        self.avail_cache = None;
+        self.used_cache = None;
         self.next_avail = Wrapping(0);
         self.next_used = Wrapping(0);
         self.num_added = Wrapping(0);

@@ -36,6 +36,68 @@ pub type GuestMemoryMmap = vm_memory::GuestRegionCollection<GuestRegionMmapExt>;
 /// Type of GuestMmapRegion.
 pub type GuestMmapRegion = vm_memory::MmapRegion<Option<AtomicBitmap>>;
 
+/// A cached translation for a contiguous range of guest memory within a single region.
+/// Analogous to QEMU's MemoryRegionCache. Created once at setup time, reused for
+/// every access to that range. Skips find_region and to_region_addr on each access.
+#[derive(Clone, Debug)]
+pub struct MemoryRegionCache {
+    /// Keeps the region (and its underlying mmap) alive.
+    region: Arc<GuestRegionMmapExt>,
+    /// Pre-computed offset of the range's start within the region.
+    region_offset: usize,
+    /// Validated length of the cached range in bytes.
+    len: usize,
+}
+
+impl MemoryRegionCache {
+    /// Translate `addr..addr+len` once, validate it fits in a single region.
+    pub fn new(
+        mem: &GuestMemoryMmap,
+        addr: GuestAddress,
+        len: usize,
+    ) -> Result<Self, GuestMemoryError> {
+        let region = mem
+            .find_region_arc(addr)
+            .ok_or(GuestMemoryError::InvalidGuestAddress(addr))?;
+        let region_addr = region
+            .to_region_addr(addr)
+            .ok_or(GuestMemoryError::InvalidGuestAddress(addr))?;
+        region
+            .checked_offset(region_addr, len.saturating_sub(1))
+            .ok_or(GuestMemoryError::InvalidGuestAddress(addr))?;
+
+        Ok(Self {
+            region,
+            region_offset: region_addr.raw_value() as usize,
+            len,
+        })
+    }
+
+    /// Read a `T` at the given byte offset within the cached range.
+    #[inline]
+    pub fn read_obj<T: ByteValued>(&self, offset: usize) -> Result<T, GuestMemoryError> {
+        let addr = MemoryRegionAddress((self.region_offset + offset) as u64);
+        self.region
+            .get_slice(addr, std::mem::size_of::<T>())
+            .map_err(|_| GuestMemoryError::InvalidGuestAddress(GuestAddress(0)))
+            .and_then(|slice| Bytes::read_obj(&slice, 0).map_err(Into::into))
+    }
+
+    /// Write a `T` at the given byte offset within the cached range.
+    #[inline]
+    pub fn write_obj<T: ByteValued>(
+        &self,
+        val: T,
+        offset: usize,
+    ) -> Result<(), GuestMemoryError> {
+        let addr = MemoryRegionAddress((self.region_offset + offset) as u64);
+        self.region
+            .get_slice(addr, std::mem::size_of::<T>())
+            .map_err(|_| GuestMemoryError::InvalidGuestAddress(GuestAddress(0)))
+            .and_then(|slice| Bytes::write_obj(&slice, val, 0).map_err(Into::into))
+    }
+}
+
 /// Errors associated with dumping guest memory to file.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum MemoryError {
