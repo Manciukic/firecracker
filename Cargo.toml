@@ -41,3 +41,6 @@ strip = "none"
 
 [profile.bench]
 strip = "debuginfo"
+
+[patch.crates-io]
+vm-memory = { path = "vendor/vm-memory" }
