@@ -263,7 +263,7 @@ impl Request {
         let data_desc;
         let status_desc;
         let desc = avail_desc
-            .next_descriptor()
+            .next_descriptor(mem)
             .ok_or(VirtioBlockError::DescriptorChainTooShort)?;
 
         if !desc.has_next() {
@@ -275,7 +275,7 @@ impl Request {
         } else {
             data_desc = desc;
             status_desc = data_desc
-                .next_descriptor()
+                .next_descriptor(mem)
                 .ok_or(VirtioBlockError::DescriptorChainTooShort)?;
 
             if data_desc.is_write_only() && req.r#type == RequestType::Out {

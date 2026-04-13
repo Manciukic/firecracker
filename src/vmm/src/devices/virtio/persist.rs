@@ -96,11 +96,7 @@ impl Persist<'_> for Queue {
             desc_table_address: GuestAddress(state.desc_table),
             avail_ring_address: GuestAddress(state.avail_ring),
             used_ring_address: GuestAddress(state.used_ring),
-
-            desc_table_ptr: std::ptr::null(),
-            avail_ring_ptr: std::ptr::null_mut(),
-            used_ring_ptr: std::ptr::null_mut(),
-
+            mem: None,
             next_avail: state.next_avail,
             next_used: state.next_used,
             uses_notif_suppression: false,

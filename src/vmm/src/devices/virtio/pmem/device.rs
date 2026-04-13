@@ -251,12 +251,13 @@ impl Pmem {
         let active_state = self.device_state.active_state().unwrap();
 
         while let Some(head) = self.queues[0].pop()? {
+            let head_index = head.index;
             let add_result = match self.process_chain(head) {
-                Ok(()) => self.queues[0].add_used(head.index, 4),
+                Ok(()) => self.queues[0].add_used(head_index, 4),
                 Err(err) => {
                     error!("pmem: {err}");
                     self.metrics.event_fails.inc();
-                    self.queues[0].add_used(head.index, 0)
+                    self.queues[0].add_used(head_index, 0)
                 }
             };
             if let Err(err) = add_result {
@@ -290,7 +291,7 @@ impl Pmem {
         if request != VIRTIO_PMEM_REQ_TYPE_FLUSH {
             return Err(PmemError::UnknownRequestType(request));
         }
-        let Some(status_descriptor) = head.next_descriptor() else {
+        let Some(status_descriptor) = head.next_descriptor(&active_state.mem) else {
             return Err(PmemError::DescriptorChainTooShort);
         };
         if !status_descriptor.is_write_only() {

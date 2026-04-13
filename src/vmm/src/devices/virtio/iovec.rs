@@ -84,7 +84,7 @@ impl IoVecBuffer {
                 .checked_add(desc.len)
                 .ok_or(IoVecError::OverflowedDescriptor)?;
 
-            next_descriptor = desc.next_descriptor();
+            next_descriptor = desc.next_descriptor(mem);
         }
 
         Ok(())
@@ -298,7 +298,7 @@ impl<const L: u16> IoVecBufferMut<L> {
                     self.vecs.pop_back(nr_iovecs);
                 })?;
 
-            next_descriptor = desc.next_descriptor();
+            next_descriptor = desc.next_descriptor(mem);
         }
 
         self.len = self.len.checked_add(length).ok_or_else(|| {

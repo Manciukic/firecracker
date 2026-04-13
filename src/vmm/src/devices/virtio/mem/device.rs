@@ -255,7 +255,7 @@ impl VirtioMem {
             .map_err(|_| VirtioMemError::DescriptorReadFailed)?;
 
         let resp_desc = avail_desc
-            .next_descriptor()
+            .next_descriptor(self.guest_memory())
             .ok_or(VirtioMemError::DescriptorChainTooShort)?;
 
         // The response MUST always be writable.
