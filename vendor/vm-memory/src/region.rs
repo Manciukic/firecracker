@@ -308,17 +308,31 @@ impl<R: GuestMemoryRegion> GuestMemory for GuestRegionCollection<R> {
     }
 
     fn find_region(&self, addr: GuestAddress) -> Option<&R> {
-        match self.regions.binary_search_by_key(&addr, |x| x.start_addr()) {
-            Ok(x) => Some(self.regions[x].as_ref()),
-            Err(x) if (x > 0 && addr <= self.regions[x - 1].last_addr()) => {
-                Some(self.regions[x - 1].as_ref())
-            }
-            _ => None,
-        }
+        self.find_region_index(addr)
+            .map(|x| self.regions[x].as_ref())
     }
 
     fn iter(&self) -> impl Iterator<Item = &Self::R> {
         self.regions.iter().map(AsRef::as_ref)
+    }
+}
+
+impl<R: GuestMemoryRegion> GuestRegionCollection<R> {
+    fn find_region_index(&self, addr: GuestAddress) -> Option<usize> {
+        match self.regions.binary_search_by_key(&addr, |x| x.start_addr()) {
+            Ok(x) => Some(x),
+            Err(x) if (x > 0 && addr <= self.regions[x - 1].last_addr()) => Some(x - 1),
+            _ => None,
+        }
+    }
+
+    /// Like `find_region`, but returns an `Arc` handle to the region.
+    ///
+    /// This is useful for callers that need to keep the region alive
+    /// independently of the `GuestRegionCollection`, such as caching.
+    pub fn find_region_arc(&self, addr: GuestAddress) -> Option<Arc<R>> {
+        self.find_region_index(addr)
+            .map(|x| Arc::clone(&self.regions[x]))
     }
 }
 
