@@ -231,6 +231,9 @@ function build_al_kernels {
     clone_amazon_linux_repo
 
     CI_CONFIG="$PWD/guest_configs/ci.config"
+    # Append efi.config so that build_al_kernel also produces
+    # a bzImage with EFI stub (needed for Nitro Enclave EIF boot).
+    EFI_CONFIG="$PWD/guest_configs/efi.config"
 
     if [[ "$KERNEL_VERSION" == @(all|5.10) ]]; then
         build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10.config "$CI_CONFIG" "$EFI_CONFIG"
@@ -238,9 +241,6 @@ function build_al_kernels {
     if [[ $ARCH == "x86_64" && "$KERNEL_VERSION" == @(all|5.10-no-acpi) ]]; then
         build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-5.10-no-acpi.config "$CI_CONFIG" "$EFI_CONFIG"
     fi
-    # On x86_64, append efi.config so that build_al_kernel also produces
-    # a bzImage with EFI stub (needed for Nitro Enclave EIF boot).
-    EFI_CONFIG="$PWD/guest_configs/efi.config"
     if [[ "$KERNEL_VERSION" == @(all|6.1) ]]; then
         build_al_kernel $PWD/guest_configs/microvm-kernel-ci-$ARCH-6.1.config "$CI_CONFIG" "$EFI_CONFIG"
     fi
