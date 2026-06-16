@@ -7,18 +7,25 @@ Backport of DMB support for the kernel. Uses dma_map_ops override
 to redirect all device DMA into the DMB shared memory region.
 
 When the DMB feature flag is present, the driver overrides the PCI device
-DMA ops with custom ops that allocate from the DMB gen_pool. All DMA
-addresses become offsets into the shared memory BAR region.
+DMA ops with custom ops that bounce all data DMA through the DMB shared
+memory BAR region. All DMA addresses become offsets into that region.
 
-Mapping tracking uses a hash table (1024 buckets) keyed on DMB handle
-for O(1) lookups, and a dedicated kmem_cache (SLAB_HWCACHE_ALIGN) for
-mapping structs to avoid per-packet kmalloc/kfree overhead.
+The DMB region is carved into PAGE_SIZE slots managed by a lockless
+bitmap allocator: allocation claims a run of slots with test_and_set_bit
+from a per-CPU rolling hint (relaxed bitmap scan first, atomic claim
+second), and free clears the bits. A per-slot dmb_orig[] array parks the
+CPU virtual address of each slot so unmap and sync resolve the original
+buffer (including sub-slot offsets) in O(1) without any mapping list or
+per-mapping allocation. Slot 0 is reserved so a valid handle is never
+aliased with DMA_MAPPING_ERROR.
 
 Signed-off-by: Alexander Graf <graf@amazon.com>
 ---
+diff --git a/drivers/virtio/Kconfig b/drivers/virtio/Kconfig
+index 7b41130d3f3..114d198046f 100644
 --- a/drivers/virtio/Kconfig
 +++ b/drivers/virtio/Kconfig
-@@ -22,6 +22,8 @@
+@@ -22,6 +22,8 @@ config VIRTIO_PCI
  	tristate "PCI driver for virtio devices"
  	depends on PCI
  	select VIRTIO
@@ -27,42 +34,43 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
  	help
  	  This driver provides support for virtio based paravirtual device
  	  drivers over PCI.  This requires that your VMM has appropriate PCI
+diff --git a/drivers/virtio/virtio_pci_common.h b/drivers/virtio/virtio_pci_common.h
+index b2f0eb4067c..f53a9e2e898 100644
 --- a/drivers/virtio/virtio_pci_common.h
 +++ b/drivers/virtio/virtio_pci_common.h
-@@ -27,6 +27,8 @@
- #include <linux/virtio_pci.h>
- #include <linux/highmem.h>
- #include <linux/spinlock.h>
-+#include <linux/genalloc.h>
-+#include <linux/hashtable.h>
-
- struct virtio_pci_vq_info {
- 	/* the actual virtqueue */
-@@ -94,6 +96,13 @@
+@@ -94,6 +94,17 @@ struct virtio_pci_device {
  	/* Whether we have vector per vq */
  	bool per_vq_vectors;
-
-+	/* Device Memory Buffer (DMB) support */
+ 
++	/* Device Memory Buffer (DMB) — lockless bitmap allocator.
++	 * PAGE_SIZE slots, test_and_set_bit alloc, clear_bit free.
++	 * dmb_orig[slot] parks the CPU VA of that slot for O(1) unmap/sync
++	 * (populated per-slot so sub-slot sync offsets resolve correctly). */
 +	void __iomem *dmb_mem;
-+	struct gen_pool *dmb_pool;
-+	DECLARE_HASHTABLE(dmb_map_ht, 10); /* 1024-bucket hash table */
-+	spinlock_t dmb_lock;
-+	struct kmem_cache *dmb_map_cache;
++	unsigned long dmb_size;
++	unsigned int dmb_nslots;
++	unsigned long *dmb_bitmap;
++	unsigned int __percpu *dmb_hint;
++	void **dmb_orig;
 +
  	struct virtqueue *(*setup_vq)(struct virtio_pci_device *vp_dev,
  				      struct virtio_pci_vq_info *info,
  				      unsigned idx,
+diff --git a/drivers/virtio/virtio_pci_modern.c b/drivers/virtio/virtio_pci_modern.c
+index 3d6ae5a5e25..ab1480bfe86 100644
 --- a/drivers/virtio/virtio_pci_modern.c
 +++ b/drivers/virtio/virtio_pci_modern.c
-@@ -15,6 +15,7 @@
+@@ -15,6 +15,9 @@
   */
-
+ 
  #include <linux/delay.h>
 +#include <linux/dma-map-ops.h>
++#include <linux/bitmap.h>
++#include <linux/percpu.h>
  #define VIRTIO_PCI_NO_LEGACY
  #define VIRTIO_RING_NO_LEGACY
  #include "virtio_pci_common.h"
-@@ -159,8 +160,127 @@
+@@ -159,8 +162,250 @@ static void vp_transport_features(struct virtio_device *vdev, u64 features)
  	if ((features & BIT_ULL(VIRTIO_F_SR_IOV)) &&
  			pci_find_ext_capability(pci_dev, PCI_EXT_CAP_ID_SRIOV))
  		__virtio_set_bit(vdev, VIRTIO_F_SR_IOV);
@@ -71,13 +79,75 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
 +		__virtio_set_bit(vdev, VIRTIO_F_DMB);
 +}
 +
-+/* DMB DMA mapping helpers — optimized with hash table + slab cache */
-+struct vp_dmb_mapping {
-+	struct hlist_node node;
-+	dma_addr_t handle;
-+	void *va;
-+	size_t size;
-+};
++/* ── Lockless single-bitmap DMB allocator ──────────────────────────── */
++
++#define VP_DMB_ALLOC_RETRIES 3
++
++static long vp_dmb_bitmap_alloc(struct virtio_pci_device *vp_dev, unsigned int nslots)
++{
++	unsigned int n = vp_dev->dmb_nslots;
++	/*
++	 * The hint is a best-effort starting point for the scan; a stale or
++	 * cross-CPU value only changes where the search begins and is harmless
++	 * for correctness. Use raw_cpu_ptr() so a preemption/migration between
++	 * the read here and the write-back below does not trip the
++	 * CONFIG_DEBUG_PREEMPT check.
++	 */
++	unsigned int *hintp = raw_cpu_ptr(vp_dev->dmb_hint);
++	unsigned int start, pass, k, taken;
++	unsigned long idx;
++
++	if (!nslots || nslots > n)
++		return -1;
++
++	start = *hintp;
++	if (start > n - nslots)
++		start = 0;
++
++	for (pass = 0; pass < VP_DMB_ALLOC_RETRIES; pass++) {
++		while (start + nslots <= n) {
++			/*
++			 * Search for a free run with plain (non-atomic) word
++			 * loads. This keeps the scan off the LOCK path so it
++			 * does not force exclusive ownership of bitmap
++			 * cachelines on every probe; only the claim below is
++			 * atomic.
++			 */
++			idx = bitmap_find_next_zero_area(vp_dev->dmb_bitmap, n,
++							 start, nslots, 0);
++			if (idx > n - nslots)
++				break;
++			/* Atomically claim the run; another CPU may have taken
++			 * a slot since the scan, so roll back and retry just
++			 * past the contended slot on collision. */
++			for (k = 0; k < nslots; k++) {
++				if (test_and_set_bit(idx + k, vp_dev->dmb_bitmap))
++					break;
++			}
++			if (k == nslots) {
++				*hintp = idx + nslots;
++				return (long)idx;
++			}
++			taken = idx + k;
++			while (k > 0) {
++				k--;
++				clear_bit(idx + k, vp_dev->dmb_bitmap);
++			}
++			start = taken + 1;
++		}
++		start = 0;
++	}
++	return -1;
++}
++
++static void vp_dmb_bitmap_free(struct virtio_pci_device *vp_dev,
++			       unsigned int slot, unsigned int nslots)
++{
++	unsigned int i;
++
++	for (i = 0; i < nslots; i++)
++		clear_bit(slot + i, vp_dev->dmb_bitmap);
++}
 +
 +static void *vp_dmb_dma_alloc(struct device *dev, size_t size,
 +			       dma_addr_t *dma_handle, gfp_t gfp,
@@ -85,28 +155,34 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
 +{
 +	struct pci_dev *pci_dev = to_pci_dev(dev);
 +	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
-+	ulong addr;
++	unsigned int nslots;
++	long slot;
 +
-+	if (!vp_dev || !vp_dev->dmb_pool)
++	if (!vp_dev || !vp_dev->dmb_bitmap)
 +		return NULL;
 +
-+	size = ALIGN(size, SMP_CACHE_BYTES);
-+	addr = gen_pool_alloc(vp_dev->dmb_pool, size);
-+	if (!addr)
++	nslots = DIV_ROUND_UP(size, PAGE_SIZE);
++	slot = vp_dmb_bitmap_alloc(vp_dev, nslots);
++	if (slot < 0)
 +		return NULL;
 +
-+	*dma_handle = addr - (ulong)vp_dev->dmb_mem;
-+	return (void *)addr;
++	*dma_handle = (dma_addr_t)slot << PAGE_SHIFT;
++	return (void *)((ulong)vp_dev->dmb_mem + (*dma_handle));
  }
-
+ 
 +static void vp_dmb_dma_free(struct device *dev, size_t size, void *vaddr,
 +			     dma_addr_t dma_handle, unsigned long attrs)
 +{
 +	struct pci_dev *pci_dev = to_pci_dev(dev);
 +	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++	unsigned int slot, nslots;
 +
-+	if (vp_dev && vp_dev->dmb_pool && vaddr)
-+		gen_pool_free(vp_dev->dmb_pool, (ulong)vaddr, size);
++	if (!vp_dev || !vp_dev->dmb_bitmap || !vaddr)
++		return;
++
++	slot = (unsigned int)(dma_handle >> PAGE_SHIFT);
++	nslots = DIV_ROUND_UP(size, PAGE_SIZE);
++	vp_dmb_bitmap_free(vp_dev, slot, nslots);
 +}
 +
 +static dma_addr_t vp_dmb_dma_map_page(struct device *dev, struct page *page,
@@ -116,33 +192,31 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
 +{
 +	struct pci_dev *pci_dev = to_pci_dev(dev);
 +	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
-+	dma_addr_t shmem_handle;
-+	void *shmem_vaddr;
-+	struct vp_dmb_mapping *mapping;
++	unsigned int nslots = DIV_ROUND_UP(size, PAGE_SIZE);
++	char *cpu_va = (char *)page_address(page) + offset;
++	long s;
++	dma_addr_t handle;
++	unsigned int i;
 +
-+	shmem_vaddr = vp_dmb_dma_alloc(dev, size, &shmem_handle, GFP_ATOMIC, 0);
-+	if (!shmem_vaddr)
++	if (!vp_dev || !vp_dev->dmb_bitmap)
 +		return DMA_MAPPING_ERROR;
 +
-+	mapping = kmem_cache_alloc(vp_dev->dmb_map_cache, GFP_ATOMIC);
-+	if (!mapping) {
-+		vp_dmb_dma_free(dev, size, shmem_vaddr, shmem_handle, 0);
++	s = vp_dmb_bitmap_alloc(vp_dev, nslots);
++	if (s < 0)
 +		return DMA_MAPPING_ERROR;
-+	}
 +
-+	mapping->handle = shmem_handle;
-+	mapping->va = page_address(page) + offset;
-+	mapping->size = size;
++	handle = (dma_addr_t)s << PAGE_SHIFT;
++
++	/* Record the CPU VA per slot so unmap/sync resolve sub-slot
++	 * offsets in O(1) without a mapping list. */
++	for (i = 0; i < nslots; i++)
++		vp_dev->dmb_orig[s + i] = cpu_va + ((size_t)i << PAGE_SHIFT);
 +
 +	if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC) &&
 +	    (dir == DMA_TO_DEVICE || dir == DMA_BIDIRECTIONAL))
-+		memcpy(shmem_vaddr, mapping->va, size);
++		memcpy((char *)vp_dev->dmb_mem + handle, cpu_va, size);
 +
-+	spin_lock(&vp_dev->dmb_lock);
-+	hash_add(vp_dev->dmb_map_ht, &mapping->node, (u32)shmem_handle);
-+	spin_unlock(&vp_dev->dmb_lock);
-+
-+	return shmem_handle;
++	return handle;
 +}
 +
 +static void vp_dmb_dma_unmap_page(struct device *dev, dma_addr_t map_handle,
@@ -151,33 +225,87 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
 +{
 +	struct pci_dev *pci_dev = to_pci_dev(dev);
 +	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
-+	void *shmem_vaddr = vp_dev->dmb_mem + map_handle;
-+	struct vp_dmb_mapping *mapping;
-+	bool found = false;
++	unsigned int slot = (unsigned int)(map_handle >> PAGE_SHIFT);
++	unsigned int nslots, i;
++	void *cpu_va;
 +
-+	spin_lock(&vp_dev->dmb_lock);
-+	hash_for_each_possible(vp_dev->dmb_map_ht, mapping, node,
-+			       (u32)map_handle) {
-+		if (mapping->handle == map_handle) {
-+			hash_del(&mapping->node);
-+			found = true;
-+			break;
-+		}
-+	}
-+	spin_unlock(&vp_dev->dmb_lock);
-+
-+	if (!found) {
-+		dev_warn(dev, "DMB unmap without map for handle %llx\n",
-+			 (unsigned long long)map_handle);
++	if (!vp_dev || !vp_dev->dmb_orig)
 +		return;
-+	}
++	cpu_va = vp_dev->dmb_orig[slot];
++
++	if (dev_WARN_ONCE(dev, !cpu_va,
++			  "DMB unmap without map of handle %lx", (long)map_handle))
++		return;
 +
 +	if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC) &&
 +	    (dir == DMA_FROM_DEVICE || dir == DMA_BIDIRECTIONAL))
-+		memcpy(mapping->va, shmem_vaddr, size);
++		memcpy(cpu_va, (char *)vp_dev->dmb_mem + map_handle, size);
 +
-+	kmem_cache_free(vp_dev->dmb_map_cache, mapping);
-+	vp_dmb_dma_free(dev, size, shmem_vaddr, map_handle, 0);
++	/*
++	 * Clear the per-slot CPU VA before releasing the bitmap slots: this
++	 * keeps the !cpu_va WARN above a live double-unmap guard and prevents a
++	 * subsequent unmap/sync from resolving a stale (possibly reused) buffer.
++	 */
++	nslots = DIV_ROUND_UP(size, PAGE_SIZE);
++	for (i = 0; i < nslots; i++)
++		vp_dev->dmb_orig[slot + i] = NULL;
++	vp_dmb_bitmap_free(vp_dev, slot, nslots);
++}
++
++static void vp_dmb_dma_sync_single_for_cpu(struct device *dev,
++					    dma_addr_t map_handle,
++					    size_t size,
++					    enum dma_data_direction dir)
++{
++	struct pci_dev *pci_dev = to_pci_dev(dev);
++	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++	unsigned int slot = (unsigned int)(map_handle >> PAGE_SHIFT);
++	ulong within = (ulong)map_handle & (PAGE_SIZE - 1);
++	char *cpu_va;
++
++	if (!vp_dev || !vp_dev->dmb_orig)
++		return;
++	cpu_va = vp_dev->dmb_orig[slot];
++
++	if (dev_WARN_ONCE(dev, !cpu_va,
++			  "DMB cpu sync without map of handle %lx", (long)map_handle))
++		return;
++
++	if (dir == DMA_FROM_DEVICE || dir == DMA_BIDIRECTIONAL)
++		memcpy(cpu_va + within, (char *)vp_dev->dmb_mem + map_handle, size);
++}
++
++static void vp_dmb_dma_sync_single_for_device(struct device *dev,
++					       dma_addr_t map_handle,
++					       size_t size,
++					       enum dma_data_direction dir)
++{
++	struct pci_dev *pci_dev = to_pci_dev(dev);
++	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++	unsigned int slot = (unsigned int)(map_handle >> PAGE_SHIFT);
++	ulong within = (ulong)map_handle & (PAGE_SIZE - 1);
++	char *cpu_va;
++
++	if (!vp_dev || !vp_dev->dmb_orig)
++		return;
++	cpu_va = vp_dev->dmb_orig[slot];
++
++	if (dev_WARN_ONCE(dev, !cpu_va,
++			  "DMB dev sync without map of handle %lx", (long)map_handle))
++		return;
++
++	if (dir == DMA_TO_DEVICE || dir == DMA_BIDIRECTIONAL)
++		memcpy((char *)vp_dev->dmb_mem + map_handle, cpu_va + within, size);
++}
++
++static size_t vp_dmb_dma_max_mapping_size(struct device *dev)
++{
++	struct pci_dev *pci_dev = to_pci_dev(dev);
++	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++
++	if (vp_dev && vp_dev->dmb_bitmap)
++		return min_t(size_t, vp_dev->dmb_size / 8, 1024 * 1024);
++	return 1024 * 1024;
 +}
 +
 +static const struct dma_map_ops vp_dmb_dma_ops = {
@@ -185,15 +313,18 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
 +	.free = vp_dmb_dma_free,
 +	.map_page = vp_dmb_dma_map_page,
 +	.unmap_page = vp_dmb_dma_unmap_page,
++	.sync_single_for_cpu = vp_dmb_dma_sync_single_for_cpu,
++	.sync_single_for_device = vp_dmb_dma_sync_single_for_device,
++	.max_mapping_size = vp_dmb_dma_max_mapping_size,
 +};
 +
  /* virtio config->finalize_features() implementation */
  static int vp_finalize_features(struct virtio_device *vdev)
  {
-@@ -179,6 +298,52 @@
+@@ -179,6 +424,69 @@ static int vp_finalize_features(struct virtio_device *vdev)
  		return -EINVAL;
  	}
-
+ 
 +	/* Initialize Device Memory Buffer if advertised by host */
 +	if (__virtio_test_bit(vdev, VIRTIO_F_DMB)) {
 +		struct virtio_shm_region region;
@@ -203,39 +334,56 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
 +			return -EINVAL;
 +		}
 +
-+		vp_dev->dmb_pool = devm_gen_pool_create(&vdev->dev,
-+					ilog2(SMP_CACHE_BYTES), -1, "virtio-dmb");
 +		vp_dev->dmb_mem = devm_memremap(&vdev->dev, region.addr,
 +					region.len, MEMREMAP_WB | MEMREMAP_DEC);
-+		hash_init(vp_dev->dmb_map_ht);
-+		spin_lock_init(&vp_dev->dmb_lock);
-+		vp_dev->dmb_map_cache = kmem_cache_create("virtio-dmb-map",
-+					sizeof(struct vp_dmb_mapping), 0,
-+					SLAB_HWCACHE_ALIGN, NULL);
-+		if (!vp_dev->dmb_map_cache) {
-+			dev_warn(&vdev->dev, "Failed to create DMB slab cache\n");
++		if (IS_ERR_OR_NULL(vp_dev->dmb_mem)) {
++			dev_warn(&vdev->dev, "Failed to map DMB region\n");
++			vp_dev->dmb_mem = NULL;
++			return -EINVAL;
++		}
++		vp_dev->dmb_size = region.len;
++		vp_dev->dmb_nslots = (unsigned int)(region.len >> PAGE_SHIFT);
++		if (vp_dev->dmb_nslots < 2) {
++			dev_warn(&vdev->dev, "DMB region too small (%lu bytes)\n",
++				 (unsigned long)region.len);
++			vp_dev->dmb_mem = NULL;
++			return -EINVAL;
++		}
++		vp_dev->dmb_bitmap = devm_bitmap_zalloc(&vdev->dev,
++					vp_dev->dmb_nslots, GFP_KERNEL);
++		vp_dev->dmb_hint = devm_alloc_percpu(&vdev->dev, unsigned int);
++		vp_dev->dmb_orig = devm_kcalloc(&vdev->dev, vp_dev->dmb_nslots,
++					sizeof(*vp_dev->dmb_orig), GFP_KERNEL);
++
++		if (!vp_dev->dmb_bitmap || !vp_dev->dmb_hint || !vp_dev->dmb_orig) {
++			/*
++			 * VIRTIO_F_DMB was negotiated, so a partial allocation
++			 * is fatal: leaving dmb_bitmap non-NULL with the DMA
++			 * ops overridden but no slot tracking would later
++			 * dereference NULL on the data path. Fail hard.
++			 */
++			dev_warn(&vdev->dev, "Failed to allocate DMB bitmap structures\n");
++			vp_dev->dmb_bitmap = NULL;
++			vp_dev->dmb_mem = NULL;
 +			return -ENOMEM;
 +		}
 +
-+		if (vp_dev->dmb_pool) {
-+			int ret = gen_pool_add_virt(vp_dev->dmb_pool,
-+						(ulong)vp_dev->dmb_mem,
-+						region.addr, region.len, -1);
-+			if (ret != 0) {
-+				dev_warn(&vdev->dev,
-+					 "Failed to init DMB region\n");
-+				return -EINVAL;
-+			}
++		{
++			int cpu;
++			unsigned int stride = max(1U, vp_dev->dmb_nslots /
++						  max(1U, num_online_cpus()));
 +
-+			/* Reserve first cache line to avoid offset 0 allocs */
-+			gen_pool_alloc(vp_dev->dmb_pool, SMP_CACHE_BYTES);
++			for_each_online_cpu(cpu)
++				*per_cpu_ptr(vp_dev->dmb_hint, cpu) =
++					(cpu * stride) % vp_dev->dmb_nslots;
++			set_bit(0, vp_dev->dmb_bitmap); /* reserve slot 0 so handle!=0 */
 +
 +			/* Override DMA ops for this PCI device */
 +			set_dma_ops(&vp_dev->pci_dev->dev, &vp_dmb_dma_ops);
 +
 +			dev_info(&vdev->dev,
-+				 "Enabled %lld bytes Virtio DMB region for %s\n",
-+				 (long long)region.len,
++				 "Enabled %lu-byte Virtio DMB (lockless bitmap, %u slots) for %s\n",
++				 vp_dev->dmb_size, vp_dev->dmb_nslots,
 +				 dev_name(&vp_dev->pci_dev->dev));
 +		}
 +	}
@@ -243,6 +391,8 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
  	vp_iowrite32(0, &vp_dev->common->guest_feature_select);
  	vp_iowrite32((u32)vdev->features, &vp_dev->common->guest_feature);
  	vp_iowrite32(1, &vp_dev->common->guest_feature_select);
+diff --git a/include/uapi/linux/virtio_config.h b/include/uapi/linux/virtio_config.h
+index b5eda06f0d5..136278576a4 100644
 --- a/include/uapi/linux/virtio_config.h
 +++ b/include/uapi/linux/virtio_config.h
 @@ -52,7 +52,7 @@
@@ -251,7 +401,7 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
  #define VIRTIO_TRANSPORT_F_START	28
 -#define VIRTIO_TRANSPORT_F_END		38
 +#define VIRTIO_TRANSPORT_F_END		43
-
+ 
  #ifndef VIRTIO_CONFIG_NO_LEGACY
  /* Do we get callbacks when the ring is completely used, even if we've
 @@ -92,4 +92,14 @@
@@ -269,6 +419,5 @@ Signed-off-by: Alexander Graf <graf@amazon.com>
 +#define VIRTIO_SHMEM_ID_DMB		2
 +
  #endif /* _UAPI_LINUX_VIRTIO_CONFIG_H */
-
---
+-- 
 2.40.1
