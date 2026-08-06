@@ -42,7 +42,7 @@ use crate::pci::{
     PciNetworkControllerSubclass, PciSBDF,
 };
 use crate::snapshot::Persist;
-use crate::vstate::bus::BusDevice;
+use crate::vstate::bus::{BusDevice, BusSlot};
 use crate::vstate::interrupts::{InterruptError, MsixVectorGroup};
 use crate::vstate::memory::GuestMemoryMmap;
 use crate::vstate::vm::KvmVm;
@@ -262,6 +262,9 @@ pub struct VirtioPciDevice {
     // The subscriber ID returned by the EventManager
     pub sub_id: Option<event_manager::SubscriberId>,
 
+    // The slot this device occupies on the MMIO bus, needed to remove it on unplug
+    pub bus_slot: Option<BusSlot>,
+
     // SBDF assigned to the device
     pub sbdf: PciSBDF,
 
@@ -397,6 +400,7 @@ impl VirtioPciDevice {
         let virtio_pci_device = VirtioPciDevice {
             id,
             sub_id: None,
+            bus_slot: None,
             sbdf,
             configuration: pci_config,
             common_config: virtio_common_config,
@@ -457,6 +461,7 @@ impl VirtioPciDevice {
         let mut virtio_pci_device = VirtioPciDevice {
             id,
             sub_id: None,
+            bus_slot: None,
             sbdf: state.sbdf,
             configuration: pci_config,
             common_config: virtio_common_config,

@@ -525,6 +525,15 @@ impl KvmVm {
     }
 
     /// Gets a mutable reference to this [`KvmVm`]'s [`ResourceAllocator`] object
+    ///
+    /// # Locking
+    ///
+    /// The returned guard must be dropped before operating on a [`crate::vstate::bus::Bus`]. A vCPU
+    /// thread takes these two locks the other way round: the bus holds its own lock for the whole
+    /// duration of a device access, and a guest-driven virtio device reset then allocates fresh
+    /// MSI-X vectors underneath it (`reset_msix()` -> [`Self::create_msix_group`] -> here). Holding
+    /// this guard while waiting for a bus lock therefore deadlocks against an ordinary guest
+    /// operation.
     pub fn resource_allocator(&self) -> MutexGuard<'_, ResourceAllocator> {
         self.common
             .resource_allocator

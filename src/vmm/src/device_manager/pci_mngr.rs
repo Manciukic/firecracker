@@ -39,7 +39,7 @@ use crate::pci::bus::PciRootError;
 use crate::resources::VmResources;
 use crate::snapshot::Persist;
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
-use crate::vstate::bus::BusError;
+use crate::vstate::bus::{BusError, BusSlot};
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::GuestMemoryMmap;
 use crate::vstate::vm::KvmVm;
@@ -89,6 +89,45 @@ impl PciDevices {
         virtio_device: Arc<Mutex<VirtioPciDevice>>,
         event_manager: &mut EventManager,
     ) -> Result<(), PciManagerError> {
+        // Register the device with the MMIO bus first, so that we can record its slot while we
+        // already hold the device lock below. No address range is mapped onto it yet, so the guest
+        // cannot reach it until `insert_range()` at the end.
+        let bus_slot = vm.common.mmio_bus.add_device(virtio_device.clone());
+
+        let res = self.attach_to_buses(
+            vm,
+            device_type,
+            id,
+            sbdf,
+            &virtio_device,
+            event_manager,
+            bus_slot,
+        );
+
+        if res.is_err() {
+            // Do not leave a dangling slot behind on the bus. Safe to call here because the device
+            // lock has been released by now.
+            let rollback = vm.common.mmio_bus.remove_device(bus_slot);
+            debug_assert!(rollback.is_ok());
+        }
+
+        res
+    }
+
+    /// Registers an already bus-registered device with the device map, the PCI bus and the guest
+    /// visible MMIO range. Split out of [`Self::attach_common`] so that a failure part-way through
+    /// can be rolled back in one place.
+    #[allow(clippy::too_many_arguments)]
+    fn attach_to_buses(
+        &mut self,
+        vm: &KvmVm,
+        device_type: VirtioDeviceType,
+        id: String,
+        sbdf: PciSBDF,
+        virtio_device: &Arc<Mutex<VirtioPciDevice>>,
+        event_manager: &mut EventManager,
+        bus_slot: BusSlot,
+    ) -> Result<(), PciManagerError> {
         let config_bar_addr = {
             let mut device = virtio_device.lock().unwrap();
 
@@ -96,6 +135,7 @@ impl PciDevices {
 
             let sub_id = event_manager.add_subscriber(device.virtio_device());
             device.sub_id = Some(sub_id);
+            device.bus_slot = Some(bus_slot);
 
             device.config_bar_addr()
         };
@@ -113,9 +153,11 @@ impl PciDevices {
             "Inserting MMIO BAR region: {:#x}:{:#x}",
             config_bar_addr, CAPABILITY_BAR_SIZE
         );
+        // Map the BAR window, making the device reachable by the guest. Only takes the bus `ranges`
+        // lock, so this cannot deadlock against a concurrent device access.
         vm.common
             .mmio_bus
-            .insert(virtio_device.clone(), config_bar_addr, CAPABILITY_BAR_SIZE)?;
+            .insert_range(bus_slot, config_bar_addr, CAPABILITY_BAR_SIZE)?;
 
         Ok(())
     }
@@ -143,11 +185,19 @@ impl PciDevices {
         let mut virtio_device =
             VirtioPciDevice::new(id.clone(), mem, device, Arc::new(msix_vectors), sbdf)?;
 
-        // Allocate bars
-        let mut resource_allocator_lock = vm.resource_allocator();
-        let resource_allocator = resource_allocator_lock.deref_mut();
+        // Allocate bars.
+        //
+        // The resource allocator lock must be released before touching the buses below. A vCPU
+        // thread handling a guest device reset walks the other way round - it holds the MMIO bus
+        // lock for the duration of the device access and takes the resource allocator underneath it,
+        // via `reset_msix()` -> `create_msix_group()` - so holding the allocator while waiting for
+        // the bus deadlocks.
+        {
+            let mut resource_allocator_lock = vm.resource_allocator();
+            let resource_allocator = resource_allocator_lock.deref_mut();
 
-        virtio_device.allocate_bars(&mut resource_allocator.mmio64_memory);
+            virtio_device.allocate_bars(&mut resource_allocator.mmio64_memory);
+        }
 
         let virtio_device = Arc::new(Mutex::new(virtio_device));
 
@@ -179,26 +229,31 @@ impl PciDevices {
             .remove(&device_id)
             .expect("device presence should be checked before detach");
 
-        // Next operations of removing device from mmio_bus and pci_bus need to wait for any other
-        // user of the device to finish. This requires us to not hold the lock for the device in
-        // case someone will try to access the device while we are in these several lines of code.
-        let (bar_addr, sbdf_device, sub_id) = {
+        // Collect what we need in a scope, so that the device lock is not held while we operate on
+        // the buses below. A vCPU thread may be accessing the device concurrently, and it holds the
+        // device mutex while doing so.
+        let (sbdf_device, sub_id, bus_slot) = {
             let pci_device = pci_device_arc.lock().expect("Poisoned lock");
 
             pci_device
                 .unregister_notification_ioevents(vm)
                 .map_err(PciManagerError::Kvm)?;
             (
-                pci_device.config_bar_addr(),
                 pci_device.sbdf.device(),
                 pci_device.sub_id,
+                pci_device.bus_slot,
             )
         };
 
-        vm.common
-            .mmio_bus
-            .remove(bar_addr, CAPABILITY_BAR_SIZE)
-            .map_err(PciManagerError::Bus)?;
+        // Removing the device from the MMIO bus waits for any in-flight access to it to finish and
+        // guarantees no new one can start, so afterwards nobody but us can hold a reference to it.
+        // This also drops the BAR range mapped onto the device.
+        if let Some(bus_slot) = bus_slot {
+            vm.common
+                .mmio_bus
+                .remove_device(bus_slot)
+                .map_err(PciManagerError::Bus)?;
+        }
 
         self.pci_segment
             .pci_bus
